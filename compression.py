@@ -76,6 +76,7 @@ class Region:
         return np.nansum(delta), np.nanmax(delta)
     
     # TODO needs rewrite?
+    # TODO: return another region?
     def get_colors(self, colormap):
         vmin, vmax = ZSCALE.get_limits(self.data)
         norm = plt.Normalize(vmin, vmax)
@@ -83,12 +84,12 @@ class Region:
 
 # TODO use temporary directory
 
-def ZFP_compress(region, round_trip_filename, *opts):
+def ZFP_compress(region, round_trip_filename, **kwargs):
     region.write_to_file("original.arr")
     width, height = region.data.shape
     
-    zip_p = subprocess.run(("zfp", "-i", "original.arr", "-2", str(width), str(height), "-f", *opts, "-z", "-"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    unzip_p = subprocess.run(("zfp", "-z", "-", "-2", str(width), str(height), "-f", *opts ,"-o", round_trip_filename), stdin=zip_p.stdout)
+    zip_p = subprocess.run(("zfp", "-i", "original.arr", "-2", str(width), str(height), "-f", *kwargs['opts'], "-z", "-"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    unzip_p = subprocess.run(("zfp", "-z", "-", "-2", str(width), str(height), "-f", *kwargs['opts'] ,"-o", round_trip_filename), stdin=zip_p.stdout)
     zip_p.wait()
     
     m = re.search("zfp=(\d+)", zip_p.stderr) # ???!
@@ -102,21 +103,21 @@ def ZFP_compress(region, round_trip_filename, *opts):
     return round_trip_filename, (error_sum, error_max, compressed_size)
 
 def ZFP_compress_fixed_rate(region, rate):
-    return ZFP_compress(region, "ZFP_r_%s.arr" % rate, "-r", str(rate))
+    return ZFP_compress(region, "ZFP_r_%s.arr" % rate, opts=("-r", str(rate)))
 
 def ZFP_compress_fixed_precision(region, precision):
-    return ZFP_compress(region, "ZFP_p_%s.arr" % precision, "-p", str(precision))
+    return ZFP_compress(region, "ZFP_p_%s.arr" % precision, opts=("-p", str(precision)))
 
 def ZFP_compress_fixed_accuracy(region, tolerance):
-    return ZFP_compress(region, "ZFP_a_%s.arr" % tolerance, "-a", str(tolerance))
+    return ZFP_compress(region, "ZFP_a_%s.arr" % tolerance, opts=("-a", str(tolerance)))
 
 
-def SZ_compress(region, round_trip_filename, *opts):
+def SZ_compress(region, round_trip_filename, **kwargs):
     region.write_to_file("original.arr")
     width, height = region.data.shape
     
-    zip_p = subprocess.run(("sz", "-c", "sz.config", *opts, "-f", "-z", "-i", "original.arr", "-2", str(width), str(height)))
-    unzip_p = subprocess.run(("sz", "-c", "sz.config", *opts, "-f", "-x", "-s", "original.arr.sz", "-2", str(width), str(height)))
+    zip_p = subprocess.run(("sz", "-c", "sz.config", *kwargs['opts'], "-f", "-z", "-i", "original.arr", "-2", str(width), str(height)))
+    unzip_p = subprocess.run(("sz", "-c", "sz.config", *kwargs['opts'], "-f", "-x", "-s", "original.arr.sz", "-2", str(width), str(height)))
     
     compressed_size = os.stat("original.arr.sz").st_size
     roundtrip_array = Region.from_file("original.arr.sz.out", region.data.dtype, width, height)
@@ -129,32 +130,52 @@ def SZ_compress(region, round_trip_filename, *opts):
     return round_trip_filename, (error_sum, error_max, compressed_size)
     
 def SZ_compress_PSNR(region, PSNR):
-    return SZ_compress(region, "SZ_PSNR_%s.arr" % PSNR, "-M", "PSNR", "-S", str(PSNR))
+    return SZ_compress(region, "SZ_PSNR_%s.arr" % PSNR, opts=("-M", "PSNR", "-S", str(PSNR)))
+
+def JPG_compress_quality(region, round_trip_filename, **kwargs):
+    region.data.save(round_trip_filename, format='JPEG', quality=kwargs['quality'])
+    compressed_size = os.stat(round_trip_filename).st_size
+    roundtrip_array = Region.from_file(round_trip_filename, region.data.dtype, width, height)
+    #deltaImage = np.abs(compressedImageArray/255.0-colormappedArray)
+    #absErrSumsJPG.append(np.nansum(deltaImage))
+    #absErrMaxValsJPG.append(np.nanmax(deltaImage))
+    return round_trip_filename, (error_sum, error_max, compressed_size)
+
+def JPG_compress_quality(region, quality):
+    return JPG_compress(region, "JPG_q_%s.arr" % quality, quality=quality)
 
 
-def compare_parameters(region, function, parameters):
-    return dict(function(region, p) for p in parameters)
+# TODO: add colourmap to everything; return colourmapped deltas as well (only colourmapped for jpeg)
+def compare_algorithm(region, function, parameter_range, colourmap):
+    return dict(function(region, colourmap, p) for p in parameter_range)
 
 # TODO: pass in ranges and working directory?
-def compare_algorithms(region):
-    results = {}
+# TODO and colormap
+# TODO split out
+#def compare_algorithms(region,):
+    #results = {}
     
-    for function, params in (
-        (ZFP_compress_fixed_rate, range(1, 32+1)),
-        (ZFP_compress_fixed_precision, range(1, 32+1)),
-        (ZFP_compress_fixed_accuracy, [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 
-                                       0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1, 
-                                       5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3, 5e-4, 2e-4, 1e-4, 
-                                       5e-5, 2e-5, 1e-5, 5e-6, 2e-6, 1e-6, 5e-7, 2e-7, 1e-7]),
-        (SZ_compress_PSNR, range(70, 70+32)),
-    ):
-        results.update(compare_parameters(region, function, params))
+    #for function, params in (
+        #(ZFP_compress_fixed_rate, range(1, 32+1)),
+        #(ZFP_compress_fixed_precision, range(1, 32+1)),
+        #(ZFP_compress_fixed_accuracy, list(range(1, 21)) + [
+                #0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1,
+                #5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3, 5e-4, 2e-4, 1e-4, 
+                #5e-5, 2e-5, 1e-5, 5e-6, 2e-6, 1e-6, 5e-7, 2e-7, 1e-7
+            #]
+        #),
+        #(SZ_compress_PSNR, range(60, 100)),
+        #(JPG_compress_quality, range(60, 101)),
+    #):
+        #results.update(compare_parameters(region, function, params))
     
-    return results
+    #return results
+    
 
+def clean_up():
+    pass # delete all of the temporary files
 
-
-# TODO: replace with functions for comparison
+# TODO: merge comparisons
 
 
 
@@ -181,6 +202,12 @@ def compare_algorithms(region):
 #plt.legend()
 #plt.xlabel('Size (MB)')
 #plt.ylabel('Absolute error (max)')
+
+
+
+
+
+
 
 ##zfpCompressFixedPrecision(originalArray, sliceWidth, sliceHeight, 12)
 #zfpCompressFixedPrecision(np.nan_to_num(originalArray), sliceWidth, sliceHeight, 10)
@@ -250,6 +277,14 @@ def compare_algorithms(region):
     #absErrMaxValsImagePSNR[i] = np.nanmax(deltaImage)
     #print ("{} ({}/{})...".format(PSNR, (i+1), len(sizesPSNR)), end='')
 #print()
+
+
+
+
+
+
+
+
 
 #plt.close()
 #plt.scatter(sizesJPG*1e-6, absErrSumsJPG/(sliceWidth*sliceHeight/100), marker='.', label='JPEG ({})'.format(colormap.name))
