@@ -21,7 +21,6 @@ import collections
 #TMP_DIR = "/tmp"
 #DATA_DIR = "~/data"
 
-ZSCALE = ZScaleInterval()
 
 class Region:
     def __init__(self, data):
@@ -75,109 +74,168 @@ class Region:
         delta = (~np.isnan(self.data)) * delta
         return np.nansum(delta), np.nanmax(delta)
     
-    # TODO needs rewrite?
-    # TODO: return another region?
-    def get_colors(self, colormap):
-        vmin, vmax = ZSCALE.get_limits(self.data)
+    def colourmapped(self, colourmap):
+        return ColourmappedRegion.from_data(self.data, colourmap)
+    
+
+
+# TODO TODO TODO fix this; we're not doing the right thing
+def ColourmappedRegion:
+    
+    ZSCALE = ZScaleInterval()
+    
+    def __init__(self, image):
+        self.image = image
+    
+    @classmethod
+    def from_data(cls, data, colourmap):
+        vmin, vmax = cls.ZSCALE.get_limits(data)
         norm = plt.Normalize(vmin, vmax)
-        return colormap(norm(self.data))[:, :, :3]
+        return cls(colourmap(norm(data))[:, :, :3])
+    
+    @classmethod
+    def from_png(cls, filename):
+        return cls(plt.imread(filename))
+    
+    @classmethod
+    def from_jpg(cls, filename):
+        return cls(plt.imread(filename)/255)
+    
+    def to_png(self, filename):
+        plt.imsave(filename, self.image)
+        
+    def to_jpg(self, filename, quality):
+        Image.fromarray((self.image*255).astype(np.uint8)).save(filename, format='JPEG', quality=quality)
+        
+    def delta_errors(self, other):
+        delta = np.abs(self.data - other.data)
+        delta = (~np.isnan(self.data)) * delta
+        return np.nansum(delta), np.nanmax(delta)
 
 # TODO use temporary directory
 
-def ZFP_compress(region, round_trip_filename, **kwargs):
-    region.write_to_file("original.arr")
+def ZFP_compress(region, colourmap, *args):
     width, height = region.data.shape
     
-    zip_p = subprocess.run(("zfp", "-i", "original.arr", "-2", str(width), str(height), "-f", *kwargs['opts'], "-z", "-"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    unzip_p = subprocess.run(("zfp", "-z", "-", "-2", str(width), str(height), "-f", *kwargs['opts'] ,"-o", round_trip_filename), stdin=zip_p.stdout)
+    zip_p = subprocess.run(("zfp", "-i", "original.arr", "-2", str(width), str(height), "-f", *args, "-z", "-"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    unzip_p = subprocess.run(("zfp", "-z", "-", "-2", str(width), str(height), "-f", *args ,"-o", "round_trip.arr"), stdin=zip_p.stdout)
     zip_p.wait()
     
     m = re.search("zfp=(\d+)", zip_p.stderr) # ???!
     compressed_size = int(m.group(1))
     
-    round_trip_region = Region.from_file(round_trip_filename, region.data.dtype, width, height)
-    error_sum, error_max = region.delta_errors(round_trip_region)
-
-    subprocess.run("rm", "original.arr")
+    round_trip_region = Region.from_file("round_trip.arr", region.data.dtype, width, height)
+    subprocess.run("rm", "round_trip.arr")
     
-    return round_trip_filename, (error_sum, error_max, compressed_size)
+    colourmapped_round_trip = round_trip_region.colourmapped(colourmap)
+    
+    return round_trip_region, colourmapped_round_trip, compressed_size, None
 
-def ZFP_compress_fixed_rate(region, rate):
-    return ZFP_compress(region, "ZFP_r_%s.arr" % rate, opts=("-r", str(rate)))
+def ZFP_compress_fixed_rate(region, colourmap, rate):
+    return ZFP_compress(region, colourmap, "-r", str(rate))
 
-def ZFP_compress_fixed_precision(region, precision):
-    return ZFP_compress(region, "ZFP_p_%s.arr" % precision, opts=("-p", str(precision)))
+def ZFP_compress_fixed_precision(region, colourmap, precision):
+    return ZFP_compress(region, colourmap, "-p", str(precision))
 
-def ZFP_compress_fixed_accuracy(region, tolerance):
-    return ZFP_compress(region, "ZFP_a_%s.arr" % tolerance, opts=("-a", str(tolerance)))
+def ZFP_compress_fixed_accuracy(region, colourmap, tolerance):
+    return ZFP_compress(region, colourmap, "-a", str(tolerance))
 
 
-def SZ_compress(region, round_trip_filename, **kwargs):
-    region.write_to_file("original.arr")
+def SZ_compress(region, colourmap, *args):
     width, height = region.data.shape
     
-    zip_p = subprocess.run(("sz", "-c", "sz.config", *kwargs['opts'], "-f", "-z", "-i", "original.arr", "-2", str(width), str(height)))
-    unzip_p = subprocess.run(("sz", "-c", "sz.config", *kwargs['opts'], "-f", "-x", "-s", "original.arr.sz", "-2", str(width), str(height)))
+    zip_p = subprocess.run(("sz", "-c", "sz.config", *args, "-f", "-z", "-i", "original.arr", "-2", str(width), str(height)))
+    unzip_p = subprocess.run(("sz", "-c", "sz.config", *args, "-f", "-x", "-s", "original.arr.sz", "-2", str(width), str(height)))
     
     compressed_size = os.stat("original.arr.sz").st_size
-    roundtrip_array = Region.from_file("original.arr.sz.out", region.data.dtype, width, height)
-    error_sum, error_max = region.delta_errors(round_trip_region)
+    round_trip_region = Region.from_file("original.arr.sz.out", region.data.dtype, width, height)
 
-    subprocess.run("rm", "original.arr")
     subprocess.run("rm", "original.arr.sz")
-    subprocess.run("mv", "original.arr.sz.out", round_trip_filename)
+    subprocess.run("rm", "original.arr.sz.out")
     
-    return round_trip_filename, (error_sum, error_max, compressed_size)
+    colourmapped_round_trip = round_trip_region.colourmapped(colourmap)
     
-def SZ_compress_PSNR(region, PSNR):
-    return SZ_compress(region, "SZ_PSNR_%s.arr" % PSNR, opts=("-M", "PSNR", "-S", str(PSNR)))
-
-def JPG_compress_quality(region, round_trip_filename, **kwargs):
-    region.data.save(round_trip_filename, format='JPEG', quality=kwargs['quality'])
-    compressed_size = os.stat(round_trip_filename).st_size
-    roundtrip_array = Region.from_file(round_trip_filename, region.data.dtype, width, height)
-    #deltaImage = np.abs(compressedImageArray/255.0-colormappedArray)
-    #absErrSumsJPG.append(np.nansum(deltaImage))
-    #absErrMaxValsJPG.append(np.nanmax(deltaImage))
-    return round_trip_filename, (error_sum, error_max, compressed_size)
-
-def JPG_compress_quality(region, quality):
-    return JPG_compress(region, "JPG_q_%s.arr" % quality, quality=quality)
-
-
-# TODO: add colourmap to everything; return colourmapped deltas as well (only colourmapped for jpeg)
-def compare_algorithm(region, function, parameter_range, colourmap):
-    return dict(function(region, colourmap, p) for p in parameter_range)
-
-# TODO: pass in ranges and working directory?
-# TODO and colormap
-# TODO split out
-#def compare_algorithms(region,):
-    #results = {}
+    return round_trip_region, colourmapped_round_trip, compressed_size, None
     
-    #for function, params in (
-        #(ZFP_compress_fixed_rate, range(1, 32+1)),
-        #(ZFP_compress_fixed_precision, range(1, 32+1)),
-        #(ZFP_compress_fixed_accuracy, list(range(1, 21)) + [
-                #0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1,
-                #5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3, 5e-4, 2e-4, 1e-4, 
-                #5e-5, 2e-5, 1e-5, 5e-6, 2e-6, 1e-6, 5e-7, 2e-7, 1e-7
-            #]
-        #),
-        #(SZ_compress_PSNR, range(60, 100)),
-        #(JPG_compress_quality, range(60, 101)),
-    #):
-        #results.update(compare_parameters(region, function, params))
+def SZ_compress_PSNR(region, colourmap, PSNR):
+    return SZ_compress(region, colourmap, "-M", "PSNR", "-S", str(PSNR))
+
+def JPG_compress_quality(region, colourmap, *args):
+    colourmapped_original = region.colourmapped(colourmap)
+    colourmapped_original.to_jpg("compressed.jpg", args[0])
     
-    #return results
+    compressed_size = os.stat("compressed.jpg").st_size
+    colourmapped_round_trip = ColourmappedRegion.from_jpg("compressed.jpg")
+
+    subprocess.run("rm", "compressed.jpg")
     
+    return None, colourmapped_round_trip, None, compressed_size
 
-def clean_up():
-    pass # delete all of the temporary files
-
-# TODO: merge comparisons
+def JPG_compress_quality(region, colourmap, quality):
+    return JPG_compress(region, colourmap, quality)
 
 
+# TODO: regenerate the regions when we want to see one; maybe cache some later
+# TODO: how do we dynamically load the function? Keep a dictionary mapping of name to function? Put them all in a class so we can just getattr?
+
+ALGORITHMS = (
+    ("ZFP (Fixed rate)", ZFP_compress_fixed_rate, range(1, 32+1)),
+    ("ZFP (Fixed precision)", ZFP_compress_fixed_precision, range(1, 32+1)),
+    ("ZFP (Fixed accuracy)", ZFP_compress_fixed_accuracy, list(range(1, 21)) + [
+                0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1,
+                5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3, 5e-4, 2e-4, 1e-4, 
+                5e-5, 2e-5, 1e-5, 5e-6, 2e-6, 1e-6, 5e-7, 2e-7, 1e-7
+            ]
+        ),
+    ("SZ (PSNR bounded)", SZ_compress_PSNR, range(60, 100)),
+    ("JPEG", JPG_compress_quality, range(60, 101)),
+)
+
+def compare_algorithms(region, colourmap):
+    
+    raw_errors = {}
+    image_errors = {}
+    size_fractions = {}
+    
+    region.write_to_file("original.arr")
+    original_raw_size = os.stat("original.arr").st_size
+    
+    colourmapped_original = region.colourmapped(colourmap)
+    colourmapped_original.to_png("original.png")
+    original_image_size = os.stat("original.png").st_size
+    
+    for label, function, params in ALGORITHMS:
+        for p in params:
+            key = (label, p)
+            
+            round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = function(region, colourmap, p)
+            
+            if round_trip_region:
+                raw_errors[key] = region.delta_errors(round_trip_region)
+            
+            image_errors[key] = colourmapped_original.delta_errors(compressed_image)
+            
+            if compressed_raw_size:
+                size_fractions[key] = compressed_raw_size/original_raw_size
+            elif compressed_image_size:
+                size_fractions[key] = compressed_image_size/original_image_size
+                
+    
+    subprocess.run("rm", "original.arr")
+    subprocess.run("rm", "original.png")
+
+    return raw_errors, image_errors, size_fractions
+
+# TODO TODO TODO
+
+# split out results for different algorithms
+# maybe put this in a pandas table?
+# scatter plot for raw error
+# scatter plot for image error
+# plot of size vs error
+# plot of error vs size
+# put these in one figure so that function can be called from one notebook cell
+# visualisation of image error: how? Display original plus compressed versions, with a slider to adjust the size?
 
 
 
