@@ -11,9 +11,6 @@ import os
 import re
 import itertools
 import subprocess
-import collections
-#get_ipython().magic('matplotlib notebook')
-#%cd "~"
 
 # This will go in the notebook
 #ZFP_EXEC = "zfp"
@@ -49,7 +46,7 @@ class Region:
     
     @classmethod
     def from_hdf5(cls, filename, stokes=0, channel=0, size=None, centre=(0, 0)):
-        with hdf5.File(self.hdf5filename, 'r') as f:
+        with h5py.File(filename, 'r') as f:
             return cls._from_data(f["0"]["DATA"], stokes, channel, size, centre)
             
     @classmethod
@@ -80,7 +77,7 @@ class Region:
 
 
 # TODO TODO TODO fix this; we're not doing the right thing
-def ColourmappedRegion:
+class ColourmappedRegion:
     
     ZSCALE = ZScaleInterval()
     
@@ -112,7 +109,8 @@ def ColourmappedRegion:
         delta = (~np.isnan(self.data)) * delta
         return np.nansum(delta), np.nanmax(delta)
 
-# TODO use temporary directory
+# TODO use temporary directory; make a class for this?
+# instantiate it; add properties for data directory, colourmap, etc?
 
 def ZFP_compress(region, colourmap, *args):
     width, height = region.data.shape
@@ -160,7 +158,7 @@ def SZ_compress(region, colourmap, *args):
 def SZ_compress_PSNR(region, colourmap, PSNR):
     return SZ_compress(region, colourmap, "-M", "PSNR", "-S", str(PSNR))
 
-def JPG_compress_quality(region, colourmap, *args):
+def JPG_compress(region, colourmap, *args):
     colourmapped_original = region.colourmapped(colourmap)
     colourmapped_original.to_jpg("compressed.jpg", args[0])
     
