@@ -28,7 +28,7 @@ class Region:
         return cls(np.fromfile(filename, dtype).reshape((width, height)))
     
     @classmethod
-    def _from_data(cls, data, stokes, channel, size, centre):
+    def _from_data(cls, data, stokes, channel, size, centre, nan_interpolation_factor=2):
         if data.ndim == 4:
             data = data[stokes]
             
@@ -41,6 +41,9 @@ class Region:
             cx, cy = centre
                 
             data = data[cx - w_2 : cx + w_2, cy - h_2 : cy + h_2]
+            
+        
+        #TODO: need to fix nans here
             
         return cls(data.copy())
     
