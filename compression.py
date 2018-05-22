@@ -25,10 +25,20 @@ class Region:
         
     @classmethod
     def from_file(cls, filename, dtype, width, height):
-        return cls(np.fromfile(filename, dtype).reshape((width, height)))
+        return cls(np.fromfile(filename, dtype=dtype).reshape(width, height))
+    
+    @staticmethod
+    def _fix_nans(data, factor):
+        X, Y = data.shape
+        blurred = np.empty((X, Y))
+        
+        for i, j in itertools.product(range(0,X,factor), range(0,Y,factor)):
+            blurred[i:i+2, j:j+2] = np.nanmean(data[i:i+2, j:j+2])
+
+        return np.where(np.isnan(data), blurred, data)
     
     @classmethod
-    def _from_data(cls, data, stokes, channel, size, centre, nan_interpolation_factor=2):
+    def _from_data(cls, data, stokes, channel, size, centre):
         if data.ndim == 4:
             data = data[stokes]
             
@@ -42,10 +52,9 @@ class Region:
                 
             data = data[cx - w_2 : cx + w_2, cy - h_2 : cy + h_2]
             
-        
-        #TODO: need to fix nans here
+        data = cls._fix_nans(data, 2)
             
-        return cls(data.copy())
+        return cls(data)
     
     @classmethod
     def from_hdf5(cls, filename, stokes=0, channel=0, size=None, centre=(0, 0)):
@@ -60,38 +69,32 @@ class Region:
     def write_to_file(self, filename):
         self.data.tofile(filename)
         
-    def fix_nans(self, factor):
-        X, Y = self.data.shape
-        blurred = np.empty((X, Y))
-        
-        for i, j in itertools.product(range(0,X,factor), range(0,Y,factor)):
-            blurred[i:i+2, j:j+2] = np.nanmean(self.data[i:i+2, j:j+2])
-
-        self.data = np.where(np.isnan(self.data), blurred, self.data)
-        
     def delta_errors(self, other):
         delta = np.abs(self.data - other.data)
         delta = (~np.isnan(self.data)) * delta
         return np.nansum(delta), np.nanmax(delta)
     
-    def colourmapped(self, colourmap):
-        return ColourmappedRegion.from_data(self.data, colourmap)
+    def colourmapped(self, colourmap, vmin=None, vmax=None):
+        return ColourmappedRegion.from_data(self.data, colourmap, vmin, vmax)
     
 
 
-# TODO TODO TODO fix this; we're not doing the right thing
 class ColourmappedRegion:
     
     ZSCALE = ZScaleInterval()
     
-    def __init__(self, image):
+    def __init__(self, image, colourmap=None, vmin=None, vmax=None):
         self.image = image
+        self.colourmap = colourmap
+        self.vmin = vmin
+        self.vmax = vmax
     
     @classmethod
-    def from_data(cls, data, colourmap):
-        vmin, vmax = cls.ZSCALE.get_limits(data)
+    def from_data(cls, data, colourmap, vmin, vmax):
+        if vmin is None or vmax is None:
+            vmin, vmax = cls.ZSCALE.get_limits(data)
         norm = plt.Normalize(vmin, vmax)
-        return cls(colourmap(norm(data))[:, :, :3])
+        return cls(colourmap(norm(data))[:, :, :3], colourmap, vmin, vmax)
     
     @classmethod
     def from_png(cls, filename):
@@ -107,73 +110,75 @@ class ColourmappedRegion:
     def to_jpg(self, filename, quality):
         Image.fromarray((self.image*255).astype(np.uint8)).save(filename, format='JPEG', quality=quality)
         
+    def clone_colourmap_to(self, region):
+        return ColourmappedRegion.from_data(region.data, self.colourmap, self.vmin, self.vmax)
+        
     def delta_errors(self, other):
-        delta = np.abs(self.data - other.data)
-        delta = (~np.isnan(self.data)) * delta
+        delta = np.abs(self.image - other.image)
+        delta = (~np.isnan(self.image)) * delta
         return np.nansum(delta), np.nanmax(delta)
 
 # TODO use temporary directory; make a class for this?
 # instantiate it; add properties for data directory, colourmap, etc?
 
-def ZFP_compress(region, colourmap, *args):
+def ZFP_compress(region, image, *args):
     width, height = region.data.shape
     
-    zip_p = subprocess.run(("zfp", "-i", "original.arr", "-2", str(width), str(height), "-f", *args, "-z", "-"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    unzip_p = subprocess.run(("zfp", "-z", "-", "-2", str(width), str(height), "-f", *args ,"-o", "round_trip.arr"), stdin=zip_p.stdout)
-    zip_p.wait()
+    zip_p = subprocess.Popen(("zfp", "-i", "original.arr", "-2", str(width), str(height), "-f", *args, "-z", "-"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    unzip_p = subprocess.Popen(("zfp", "-z", "-", "-2", str(width), str(height), "-f", *args ,"-o", "round_trip.arr"), stdin=zip_p.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    zip_p.stdout.close()
     
-    m = re.search("zfp=(\d+)", zip_p.stderr) # ???!
+    m = re.search("zfp=(\d+)", unzip_p.communicate()[1].decode())
     compressed_size = int(m.group(1))
     
-    round_trip_region = Region.from_file("round_trip.arr", region.data.dtype, width, height)
-    subprocess.run("rm", "round_trip.arr")
+    round_trip_region = Region.from_file("round_trip.arr", "f4", width, height)
+    subprocess.run(("rm", "round_trip.arr"))
     
-    colourmapped_round_trip = round_trip_region.colourmapped(colourmap)
+    compressed_image = image.clone_colourmap_to(round_trip_region)
     
-    return round_trip_region, colourmapped_round_trip, compressed_size, None
+    return round_trip_region, compressed_image, compressed_size, None
 
-def ZFP_compress_fixed_rate(region, colourmap, rate):
-    return ZFP_compress(region, colourmap, "-r", str(rate))
+def ZFP_compress_fixed_rate(region, image, rate):
+    return ZFP_compress(region, image, "-r", str(rate))
 
-def ZFP_compress_fixed_precision(region, colourmap, precision):
-    return ZFP_compress(region, colourmap, "-p", str(precision))
+def ZFP_compress_fixed_precision(region, image, precision):
+    return ZFP_compress(region, image, "-p", str(precision))
 
-def ZFP_compress_fixed_accuracy(region, colourmap, tolerance):
-    return ZFP_compress(region, colourmap, "-a", str(tolerance))
+def ZFP_compress_fixed_accuracy(region, image, tolerance):
+    return ZFP_compress(region, image, "-a", str(tolerance))
 
 
-def SZ_compress(region, colourmap, *args):
+def SZ_compress(region, image, *args):
     width, height = region.data.shape
     
-    zip_p = subprocess.run(("sz", "-c", "sz.config", *args, "-f", "-z", "-i", "original.arr", "-2", str(width), str(height)))
-    unzip_p = subprocess.run(("sz", "-c", "sz.config", *args, "-f", "-x", "-s", "original.arr.sz", "-2", str(width), str(height)))
+    subprocess.run(("sz", "-c", "sz.config", *args, "-f", "-z", "-i", "original.arr", "-2", str(width), str(height)))
+    subprocess.run(("sz", "-c", "sz.config", *args, "-f", "-x", "-s", "original.arr.sz", "-2", str(width), str(height)))
     
     compressed_size = os.stat("original.arr.sz").st_size
-    round_trip_region = Region.from_file("original.arr.sz.out", region.data.dtype, width, height)
+    round_trip_region = Region.from_file("original.arr.sz.out", "f4", width, height)
 
-    subprocess.run("rm", "original.arr.sz")
-    subprocess.run("rm", "original.arr.sz.out")
+    subprocess.run(("rm", "original.arr.sz"))
+    subprocess.run(("rm", "original.arr.sz.out"))
     
-    colourmapped_round_trip = round_trip_region.colourmapped(colourmap)
+    compressed_image = image.clone_colourmap_to(round_trip_region)
     
-    return round_trip_region, colourmapped_round_trip, compressed_size, None
+    return round_trip_region, compressed_image, compressed_size, None
     
-def SZ_compress_PSNR(region, colourmap, PSNR):
-    return SZ_compress(region, colourmap, "-M", "PSNR", "-S", str(PSNR))
+def SZ_compress_PSNR(region, image, PSNR):
+    return SZ_compress(region, image, "-M", "PSNR", "-S", str(PSNR))
 
-def JPG_compress(region, colourmap, *args):
-    colourmapped_original = region.colourmapped(colourmap)
-    colourmapped_original.to_jpg("compressed.jpg", args[0])
+def JPG_compress(region, image, *args):
+    image.to_jpg("compressed.jpg", args[0])
     
     compressed_size = os.stat("compressed.jpg").st_size
-    colourmapped_round_trip = ColourmappedRegion.from_jpg("compressed.jpg")
+    compressed_image = ColourmappedRegion.from_jpg("compressed.jpg")
 
-    subprocess.run("rm", "compressed.jpg")
+    subprocess.run(("rm", "compressed.jpg"))
     
-    return None, colourmapped_round_trip, None, compressed_size
+    return None, compressed_image, None, compressed_size
 
-def JPG_compress_quality(region, colourmap, quality):
-    return JPG_compress(region, colourmap, quality)
+def JPG_compress_quality(region, image, quality):
+    return JPG_compress(region, image, quality)
 
 
 # TODO: regenerate the regions when we want to see one; maybe cache some later
@@ -201,20 +206,20 @@ def compare_algorithms(region, colourmap):
     region.write_to_file("original.arr")
     original_raw_size = os.stat("original.arr").st_size
     
-    colourmapped_original = region.colourmapped(colourmap)
-    colourmapped_original.to_png("original.png")
+    image = region.colourmapped(colourmap)
+    image.to_png("original.png")
     original_image_size = os.stat("original.png").st_size
     
     for label, function, params in ALGORITHMS:
         for p in params:
             key = (label, p)
             
-            round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = function(region, colourmap, p)
+            round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = function(region, image, p)
             
             if round_trip_region:
                 raw_errors[key] = region.delta_errors(round_trip_region)
             
-            image_errors[key] = colourmapped_original.delta_errors(compressed_image)
+            image_errors[key] = image.delta_errors(compressed_image)
             
             if compressed_raw_size:
                 size_fractions[key] = compressed_raw_size/original_raw_size
@@ -222,8 +227,8 @@ def compare_algorithms(region, colourmap):
                 size_fractions[key] = compressed_image_size/original_image_size
                 
     
-    subprocess.run("rm", "original.arr")
-    subprocess.run("rm", "original.png")
+    subprocess.run(("rm", "original.arr"))
+    subprocess.run(("rm", "original.png"))
 
     return raw_errors, image_errors, size_fractions
 
