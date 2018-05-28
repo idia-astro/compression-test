@@ -322,12 +322,12 @@ class Comparator:
             size_fraction, function_name, p, error = results[-1]
             round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(self.compressor, function_name)(p)
             images[label] = (compressed_image, error)
-            print("%s with parameter %d: size %g, error %1.2e" % (label, p, size_fraction, error))
+            print("%s with parameter %d: size %.2f, error %1.2e" % (label, p, size_fraction, error))
             
         fig, axs = plt.subplots(nrows=2, ncols=3)
         
         axs[0][1].imshow(self.image.image)
-        axs[0][1].set_xlabel("EXACT")
+        axs[0][1].set_xlabel("EXACT", fontweight='bold')
         
         unused_positions = [v for v in self.IMAGE_POSITIONS.values()]
 
