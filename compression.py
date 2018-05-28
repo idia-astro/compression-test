@@ -11,6 +11,7 @@ import os
 import re
 import itertools
 import subprocess
+import operator
 
 class Region:
     def __init__(self, data):
@@ -110,6 +111,8 @@ class ColourmappedRegion:
         delta = np.abs(self.image - other.image) / np.abs(self.image)
         delta = (~np.isnan(np.abs(self.image))) * delta
         return np.nanmean(delta), np.nanmax(delta)
+    
+    
 
 # TODO use temporary directory and executable paths
 
@@ -203,7 +206,8 @@ class Compressor:
 
 
 class Comparator:
-    def __init__(self, results, compressor):
+    def __init__(self, image, results, compressor):
+        self.image = image
         self.results = results
         self.compressor = compressor
 
@@ -219,6 +223,22 @@ class Comparator:
         ("SZ (PSNR bounded)", "SZ_compress_PSNR", range(60, 100)),
         ("JPEG", "JPG_compress_quality", range(60, 101)),
     )
+        
+    PLOT_COLOURS = {
+        "ZFP (Fixed rate)": "red",
+        "ZFP (Fixed precision)": "orange",
+        "ZFP (Fixed accuracy)": "yellow",
+        "SZ (PSNR bounded)": "green",
+        "JPEG": "blue",
+    }
+        
+    IMAGE_POSITIONS = {
+        "ZFP (Fixed rate)": (1, 0),
+        "ZFP (Fixed precision)": (1, 1),
+        "ZFP (Fixed accuracy)": (1, 2),
+        "SZ (PSNR bounded)": (0, 0),
+        "JPEG": (0, 2),
+    }
 
     @classmethod
     def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz"):
@@ -263,32 +283,61 @@ class Comparator:
                     
         subprocess.run(("rm", "original.png"))
         
-        return cls(results, compressor)
+        return cls(image, results, compressor)
 
-    # insufficiently generic; just inline these in the plot function
     def get(self, fields, where):
-        return [[r[f] for f in fields] for r in self.results if all(r[k] == v for k, v in where.items())]
+        return [[r[f] for f in fields] for r in self.results if all(comp(r[k], v) for k, (v, comp) in where.items())]
     
     def unique(self, field):
         return {r[field] for r in self.results}
         
-    def plot(self, xfield, yfield, xlabel, ylabel):
-
-        plt.close()
-        
+    def plot(self, xfield, yfield, xlabel, ylabel, plt_obj=plt):
         for label in self.unique("label"):
-            xy = sorted(self.get((xfield, yfield), {"label": label})) # sort by xfield
+            xy = sorted(self.get((xfield, yfield), {"label": (label, operator.eq)})) # sort by xfield
             x, y = zip(*xy)
             
             if all(v is None for v in y):
                 continue # skip e.g. non-existent raw errors for JPEG
             
-            plt.plot(x, y, marker='o', ls='', label=label)
+            plt_obj.plot(x, y, marker='o', ls='', label=label, color=self.PLOT_COLOURS[label])
             
-        plt.legend()
-        plt.xlabel(xlabel)
-        plt.ylabel(ylabel)
-        plt.show()
+        plt_obj.legend()
         
-    def show_images(self, size_min, size_max):
-        # TODO: get all images within a size range and display them together with original image. Stacked? Raise on mouseover?
+        if hasattr(plt_obj, "set_xlabel"):
+            plt_obj.set_xlabel(xlabel)
+            plt_obj.set_ylabel(ylabel)
+        else:
+            plt_obj.xlabel(xlabel)
+            plt_obj.ylabel(ylabel)
+        
+    def show_images(self, size):
+        images = {}
+
+        for label in self.unique("label"):
+            results = sorted(self.get(("size_fraction", "function_name", "param", "image_error_mean"), {"label": (label, operator.eq), "size_fraction": (size, operator.le)}))
+            
+            if not results:
+                continue
+            
+            size_fraction, function_name, p, error = results[-1]
+            round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(self.compressor, function_name)(p)
+            images[label] = (compressed_image, error)
+            print("%s with parameter %d: size %g, error %1.2e" % (label, p, size_fraction, error))
+            
+        fig, axs = plt.subplots(nrows=2, ncols=3)
+        
+        axs[0][1].imshow(self.image.image)
+        axs[0][1].set_xlabel("EXACT")
+        
+        unused_positions = [v for v in self.IMAGE_POSITIONS.values()]
+
+        for label, (image, error) in images.items():
+            i, j = self.IMAGE_POSITIONS[label]
+            axs[i][j].imshow(image.image) # make this more OO
+            axs[i][j].set_xlabel(label)
+            unused_positions.remove((i, j))
+            
+        empty = np.zeros(self.image.image.size).reshape(self.image.image.shape)
+        for i, j in unused_positions:
+            axs[i][j].imshow(empty)
+        
