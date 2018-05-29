@@ -13,7 +13,22 @@ import itertools
 import subprocess
 import operator
 
-class Region:
+class DataWrapperMixin:
+    def _delta_errors(self, other, dataname, *functions):
+        self_data = getattr(self, dataname)
+        other_data = getattr(other, dataname)
+        
+        # relative error
+        with np.warnings.catch_warnings():
+            np.warnings.simplefilter("ignore", category=RuntimeWarning)
+            delta = np.abs(self_data - other_data) / np.abs(self_data)
+        # remove infs from division by zero
+        delta = delta[~np.isinf(delta)]
+        
+        # these functions should exclude nans -- nanmean, nanmax, etc.
+        return tuple(f(delta) for f in functions)
+
+class Region(DataWrapperMixin):
     def __init__(self, data):
         self.data = data
         
@@ -63,17 +78,15 @@ class Region:
     def write_to_file(self, filename, dtype):
         self.data.astype(dtype).tofile(filename)
         
-    def delta_errors(self, other):
-        delta = np.abs(self.data - other.data) / np.abs(self.data)
-        delta = (~np.isnan(self.data)) * delta
-        return np.nanmean(delta), np.nanmax(delta)
+    def delta_errors(self, other, *functions):
+        return self._delta_errors(other, "data", *functions)
     
     def colourmapped(self, colourmap, vmin=None, vmax=None):
         return ColourmappedRegion.from_data(self.data, colourmap, vmin, vmax)
     
 
 
-class ColourmappedRegion:
+class ColourmappedRegion(DataWrapperMixin):
     
     ZSCALE = ZScaleInterval()
     
@@ -107,12 +120,9 @@ class ColourmappedRegion:
     def clone_colourmap_to(self, region):
         return ColourmappedRegion.from_data(region.data, self.colourmap, self.vmin, self.vmax)
         
-    def delta_errors(self, other):
-        delta = np.abs(self.image - other.image) / np.abs(self.image)
-        delta = (~np.isnan(np.abs(self.image))) * delta
-        return np.nanmean(delta), np.nanmax(delta)
-    
-    
+    def delta_errors(self, other, *functions):
+        return self._delta_errors(other, "image", *functions)
+
 
 # TODO use temporary directory and executable paths
 
@@ -257,18 +267,21 @@ class Comparator:
             for p in params:
                 round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(compressor, function_name)(p)
                 
+                # TODO: make error functions configurable, and whether error is absolute or relative. Precalculate everything and select plots with another widget?
+                
                 if round_trip_region:
-                    raw_error_mean, raw_error_max = region.delta_errors(round_trip_region)
+                    raw_error_mean, raw_error_max = region.delta_errors(round_trip_region, np.nanmean, np.nanmax)
                 else:
                     raw_error_mean, raw_error_max = None, None
                 
-                image_error_mean, image_error_max = image.delta_errors(compressed_image)
+                image_error_mean, image_error_max = image.delta_errors(compressed_image, np.nanmean, np.nanmax)
                 
                 if compressed_raw_size:
                     size_fraction = compressed_raw_size/original_raw_size
                 elif compressed_image_size:
                     size_fraction = compressed_image_size/original_image_size
-                    
+                
+                # TODO: use pandas for this instead of reinventing the wheel?
                 results.append({
                     "label": label,
                     "function_name": function_name, # may need it later to regenerate images
@@ -309,6 +322,9 @@ class Comparator:
         else:
             plt_obj.xlabel(xlabel)
             plt_obj.ylabel(ylabel)
+            
+    def show_plots(self, absolute, functions):
+        pass # TODO move the cruft from the notebook to here and make these parameters configurable
         
     def show_images(self, size):
         images = {}
