@@ -13,6 +13,7 @@ import itertools
 import subprocess
 import operator
 
+
 class DataWrapperMixin:
     def _delta_errors(self, other, dataname, *functions):
         self_data = getattr(self, dataname)
@@ -270,11 +271,11 @@ class Comparator:
                 # TODO: make error functions configurable, and whether error is absolute or relative. Precalculate everything and select plots with another widget?
                 
                 if round_trip_region:
-                    raw_error_mean, raw_error_max = region.delta_errors(round_trip_region, np.nanmean, np.nanmax)
+                    raw_error_mean, raw_error_max, raw_error_median = region.delta_errors(round_trip_region, np.nanmean, np.nanmax, np.nanmedian)
                 else:
-                    raw_error_mean, raw_error_max = None, None
+                    raw_error_mean, raw_error_max, raw_error_median = None, None, None
                 
-                image_error_mean, image_error_max = image.delta_errors(compressed_image, np.nanmean, np.nanmax)
+                image_error_mean, image_error_max, image_error_median = image.delta_errors(compressed_image, np.nanmean, np.nanmax, np.nanmedian)
                 
                 if compressed_raw_size:
                     size_fraction = compressed_raw_size/original_raw_size
@@ -286,10 +287,12 @@ class Comparator:
                     "label": label,
                     "function_name": function_name, # may need it later to regenerate images
                     "param": p, # may need it later to regenerate images
-                    "raw_error_mean": raw_error_mean, 
-                    "raw_error_max": raw_error_max, 
-                    "image_error_mean": image_error_mean, 
-                    "image_error_max": image_error_max, 
+                    "raw_error_mean": raw_error_mean,
+                    "raw_error_max": raw_error_max,
+                    "raw_error_median": raw_error_median,
+                    "image_error_mean": image_error_mean,
+                    "image_error_max": image_error_max,
+                    "image_error_median": image_error_median,
                     "size_fraction": size_fraction,
                 })
 
@@ -322,10 +325,10 @@ class Comparator:
         else:
             plt_obj.xlabel(xlabel)
             plt_obj.ylabel(ylabel)
-            
-    def show_plots(self, plots=("mean", "max"), datasets=("raw", "image"), figsize=(15, 10)):
+    
+    def show_plots(self, plots, datasets, width, height):
         # TODO absolute vs relative error
-        plt.rcParams['figure.figsize'] = figsize
+        plt.rcParams['figure.figsize'] = (width, height)
         
         nrows = len(plots)
         ncols = len(datasets)
