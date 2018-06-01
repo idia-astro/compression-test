@@ -323,9 +323,21 @@ class Comparator:
             plt_obj.xlabel(xlabel)
             plt_obj.ylabel(ylabel)
             
-    def show_plots(self, absolute, functions):
-        pass # TODO move the cruft from the notebook to here and make these parameters configurable
+    def show_plots(self, plots=("mean", "max"), datasets=("raw", "image"), figsize=(15, 10)):
+        # TODO absolute vs relative error
+        plt.rcParams['figure.figsize'] = figsize
         
+        nrows = len(plots)
+        ncols = len(datasets)
+                
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, squeeze=False)
+
+        
+        for i, plot in enumerate(plots):
+            for j, dataset in enumerate(datasets):
+                self.plot("size_fraction", "%s_error_%s" % (dataset, plot), "Size (fraction)", 
+                        "%s error (fraction %s)" % (dataset, plot), axs[i][j])
+
     def show_images(self, size):
         images = {}
 
