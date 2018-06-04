@@ -13,21 +13,29 @@ import itertools
 import subprocess
 import operator
 
+from ipywidgets import interact, FloatSlider, IntSlider, SelectMultiple
+
 
 class DataWrapperMixin:
     def _delta_errors(self, other, dataname, *functions):
         self_data = getattr(self, dataname)
         other_data = getattr(other, dataname)
         
-        # relative error
         with np.warnings.catch_warnings():
             np.warnings.simplefilter("ignore", category=RuntimeWarning)
-            delta = np.abs(self_data - other_data) / np.abs(self_data)
-        # remove infs from division by zero
-        delta = delta[~np.isinf(delta)]
+            delta = np.abs(self_data - other_data)
+            
+            absolute_errors = [f(delta) for f in functions]
+            
+            # relative error
+            delta = delta / np.abs(self_data)
+            # remove infs from division by zero
+            delta = delta[~np.isinf(delta)]
+            
+            relative_errors = [f(delta) for f in functions]
         
         # these functions should exclude nans -- nanmean, nanmax, etc.
-        return tuple(f(delta) for f in functions)
+        return tuple(zip(absolute_errors, relative_errors))
 
 class Region(DataWrapperMixin):
     def __init__(self, data):
@@ -250,6 +258,8 @@ class Comparator:
         "SZ (PSNR bounded)": (0, 0),
         "JPEG": (0, 2),
     }
+    
+    ERROR_FUNCTION_NAMES = ("mean", "max", "median")
 
     @classmethod
     def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz"):
@@ -266,35 +276,38 @@ class Comparator:
         for label, function_name, params in cls.ALGORITHMS:
             
             for p in params:
-                round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(compressor, function_name)(p)
-                
-                # TODO: make error functions configurable, and whether error is absolute or relative. Precalculate everything and select plots with another widget?
-                
-                if round_trip_region:
-                    raw_error_mean, raw_error_max, raw_error_median = region.delta_errors(round_trip_region, np.nanmean, np.nanmax, np.nanmedian)
-                else:
-                    raw_error_mean, raw_error_max, raw_error_median = None, None, None
-                
-                image_error_mean, image_error_max, image_error_median = image.delta_errors(compressed_image, np.nanmean, np.nanmax, np.nanmedian)
-                
-                if compressed_raw_size:
-                    size_fraction = compressed_raw_size/original_raw_size
-                elif compressed_image_size:
-                    size_fraction = compressed_image_size/original_image_size
-                
-                # TODO: use pandas for this instead of reinventing the wheel?
-                results.append({
+                result_dict = {
                     "label": label,
                     "function_name": function_name, # may need it later to regenerate images
-                    "param": p, # may need it later to regenerate images
-                    "raw_error_mean": raw_error_mean,
-                    "raw_error_max": raw_error_max,
-                    "raw_error_median": raw_error_median,
-                    "image_error_mean": image_error_mean,
-                    "image_error_max": image_error_max,
-                    "image_error_median": image_error_median,
-                    "size_fraction": size_fraction,
-                })
+                    "param": p, # may need it later to regenerate images}
+                }
+                
+                round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(compressor, function_name)(p)
+                
+                # ERRORS: raw data and image; absolute and relative; multiple functions
+                
+                error_functions = [getattr(np, "nan" + n) for n in cls.ERROR_FUNCTION_NAMES]
+                
+                if round_trip_region:
+                    # these are (absolute, relative) pairs
+                    raw_errors = region.delta_errors(round_trip_region, *error_functions)
+                else:
+                    raw_errors = [(None, None)] * len(error_functions)
+                
+                image_errors = image.delta_errors(compressed_image, *error_functions)
+                
+                for func_name, (raw_abs, raw_rel), (img_abs, img_rel) in zip(cls.ERROR_FUNCTION_NAMES, raw_errors, image_errors):
+                    result_dict["raw_error_%s_abs" % func_name] = raw_abs
+                    result_dict["raw_error_%s_rel" % func_name] = raw_rel
+                    result_dict["image_error_%s_abs" % func_name] = img_abs
+                    result_dict["image_error_%s_rel" % func_name] = img_rel
+                
+                if compressed_raw_size:
+                    result_dict["size_fraction"] = compressed_raw_size/original_raw_size
+                elif compressed_image_size:
+                    result_dict["size_fraction"] = compressed_image_size/original_image_size
+                
+                results.append(result_dict)
 
                     
         subprocess.run(("rm", "original.png"))
@@ -326,7 +339,7 @@ class Comparator:
             plt_obj.xlabel(xlabel)
             plt_obj.ylabel(ylabel)
     
-    def show_plots(self, plots, datasets, width, height):
+    def show_plots(self, plots, datasets, relative, width, height):
         # TODO absolute vs relative error
         plt.rcParams['figure.figsize'] = (width, height)
         
@@ -335,25 +348,38 @@ class Comparator:
                 
         fig, axs = plt.subplots(nrows=nrows, ncols=ncols, squeeze=False)
 
+        desc = "relative" if relative else "absolute"
         
         for i, plot in enumerate(plots):
             for j, dataset in enumerate(datasets):
-                self.plot("size_fraction", "%s_error_%s" % (dataset, plot), "Size (fraction)", 
-                        "%s error (fraction %s)" % (dataset, plot), axs[i][j])
+                self.plot("size_fraction", "%s_error_%s_%s" % (dataset, plot, desc[:3]), "Size (fraction)", 
+                        "%s error (%s %s)" % (dataset, desc, plot), axs[i][j])
+                
+    def widget_plots(self):
+        return interact(
+            self.show_plots, 
+            plots=SelectMultiple(options=["mean", "max", "median"], value=["mean", "max"], description="Plots"), 
+            datasets=SelectMultiple(options=["raw", "image"], value=["image"], description="Datasets"),
+            relative=False,
+            width=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot width"), 
+            height=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
+        )
 
-    def show_images(self, size):
+    def show_images(self, size, width, height):
+        plt.rcParams['figure.figsize'] = (width, height)
+        
         images = {}
 
         for label in self.unique("label"):
-            results = sorted(self.get(("size_fraction", "function_name", "param", "image_error_mean"), {"label": (label, operator.eq), "size_fraction": (size, operator.le)}))
+            results = sorted(self.get(("size_fraction", "function_name", "param", "image_error_mean_abs", "image_error_mean_rel"), {"label": (label, operator.eq), "size_fraction": (size, operator.le)}))
             
             if not results:
                 continue
             
-            size_fraction, function_name, p, error = results[-1]
+            size_fraction, function_name, p, error_a, error_r = results[-1]
             round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(self.compressor, function_name)(p)
-            images[label] = (compressed_image, error)
-            print("%s with parameter %d: size %.2f, error %1.2e" % (label, p, size_fraction, error))
+            images[label] = compressed_image
+            print("%s with parameter %d: size %.2f, error %.2g (absolute) %1.2e (relative)" % (label, p, size_fraction, error_a, error_r))
             
         fig, axs = plt.subplots(nrows=2, ncols=3)
         
@@ -362,7 +388,7 @@ class Comparator:
         
         unused_positions = [v for v in self.IMAGE_POSITIONS.values()]
 
-        for label, (image, error) in images.items():
+        for label, image in images.items():
             i, j = self.IMAGE_POSITIONS[label]
             axs[i][j].imshow(image.image) # make this more OO
             axs[i][j].set_xlabel(label)
@@ -372,3 +398,10 @@ class Comparator:
         for i, j in unused_positions:
             axs[i][j].imshow(empty)
         
+    def widget_images(self):
+        return interact(
+            self.show_images, 
+            size=FloatSlider(value=0.5, min=0, max=1, step=0.01, continuous_update=False, description="Size fraction"),
+            width=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot width"), 
+            height=IntSlider(value=10, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
+        )
