@@ -3,6 +3,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy import interpolate
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
 import h5py
@@ -46,14 +47,19 @@ class Region(DataWrapperMixin):
         return cls(np.fromfile(filename, dtype=dtype).reshape(width, height))
     
     @staticmethod
-    def _fix_nans(data, factor):
-        X, Y = data.shape
-        blurred = np.empty((X, Y))
+    def _fix_nans(data):
+        if np.all(np.isnan(data)):
+            raise ValueError("This channel contains only NaNs! Please select a different channel.")
         
-        for i, j in itertools.product(range(0,X,factor), range(0,Y,factor)):
-            blurred[i:i+2, j:j+2] = np.nanmean(data[i:i+2, j:j+2])
+        x = np.arange(0, data.shape[1])
+        y = np.arange(0, data.shape[0])
+        data = np.ma.masked_invalid(data)
+        xx, yy = np.meshgrid(x, y)
+        x1 = xx[~data.mask]
+        y1 = yy[~data.mask]
+        new_data = data[~data.mask]
 
-        return np.where(np.isnan(data), blurred, data)
+        return interpolate.griddata((x1, y1), new_data.ravel(), (xx, yy), method='cubic')
     
     @classmethod
     def _from_data(cls, data, stokes, channel, size, centre):
@@ -70,7 +76,7 @@ class Region(DataWrapperMixin):
                 
             data = data[cx - w_2 : cx + w_2, cy - h_2 : cy + h_2]
             
-        data = cls._fix_nans(data, 2)
+        data = cls._fix_nans(data)
             
         return cls(data)
     
@@ -358,7 +364,7 @@ class Comparator:
     def widget_plots(self):
         return interact(
             self.show_plots, 
-            plots=SelectMultiple(options=["mean", "max", "median"], value=["mean", "max"], description="Plots"), 
+            plots=SelectMultiple(options=self.ERROR_FUNCTION_NAMES, value=["mean", "max"], description="Plots"), 
             datasets=SelectMultiple(options=["raw", "image"], value=["image"], description="Datasets"),
             relative=False,
             width=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot width"), 
