@@ -51,6 +51,8 @@ class Region(DataWrapperMixin):
         if np.all(np.isnan(data)):
             raise ValueError("This channel contains only NaNs! Please select a different channel.")
         
+        print("Number of NaNs (before interpolation):", np.sum(np.isnan(data)))
+        
         x = np.arange(0, data.shape[1])
         y = np.arange(0, data.shape[0])
         data = np.ma.masked_invalid(data)
@@ -58,8 +60,12 @@ class Region(DataWrapperMixin):
         x1 = xx[~data.mask]
         y1 = yy[~data.mask]
         new_data = data[~data.mask]
-
-        return interpolate.griddata((x1, y1), new_data.ravel(), (xx, yy), method='cubic')
+        
+        data = interpolate.griddata((x1, y1), new_data.ravel(), (xx, yy), method='cubic')
+        
+        print("Number of NaNs (after interpolation):", np.sum(np.isnan(data)))
+    
+        return data
     
     @classmethod
     def _from_data(cls, data, stokes, channel, size, centre):
