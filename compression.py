@@ -14,7 +14,7 @@ import itertools
 import subprocess
 import operator
 
-from ipywidgets import interact, FloatSlider, IntSlider, SelectMultiple, Text
+from ipywidgets import interact, FloatSlider, IntSlider, SelectMultiple, Text, Dropdown
 
 
 class DataWrapperMixin:
@@ -364,15 +364,13 @@ class Comparator:
             plt_obj.xlabel(xlabel)
             plt_obj.ylabel(ylabel)
     
-    def show_plots(self, plots, datasets, relative, xmin, xmax, ymin, ymax, width, height):
+    def show_plots(self, plots, datasets, error_type, xmin, xmax, ymin, ymax, width, height):
         plt.rcParams['figure.figsize'] = (width, height)
         
         nrows = len(plots)
         ncols = len(datasets)
                         
         fig, axs = plt.subplots(nrows=nrows, ncols=ncols, squeeze=False)
-
-        desc = "relative" if relative else "absolute"
         
         def float_or_none(val):
             try:
@@ -387,15 +385,15 @@ class Comparator:
         
         for i, plot in enumerate(plots):
             for j, dataset in enumerate(datasets):
-                self.plot("size_fraction", "%s_error_%s_%s" % (dataset, plot, desc[:3]), "Size (fraction)", 
-                        "%s error (%s %s)" % (dataset, desc, plot), axs[i][j], xmin, xmax, ymin, ymax)
+                self.plot("size_fraction", "%s_error_%s_%s" % (dataset, plot, error_type[:3]), "Size (fraction)", 
+                        "%s error (%s %s)" % (dataset, error_type, plot), axs[i][j], xmin, xmax, ymin, ymax)
                 
     def widget_plots(self):
         return interact(
             self.show_plots, 
             plots=SelectMultiple(options=self.ERROR_FUNCTION_NAMES, value=["mean", "max"], description="Plots"), 
             datasets=SelectMultiple(options=["raw", "image"], value=["image"], description="Datasets"),
-            relative=False,
+            error_type=Dropdown(options={"Absolute": "absolute", "Relative": "relative"}, value="absolute", description='Error'),
             xmin=Text(value="", placeholder="Type a number or leave blank to disable", description='Min x'),
             xmax=Text(value="", placeholder="Type a number or leave blank to disable", description='Max x'),
             ymin=Text(value="", placeholder="Type a number or leave blank to disable", description='Min y'),
@@ -404,7 +402,7 @@ class Comparator:
             height=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
         )
 
-    def show_images(self, size, width, height):
+    def show_images(self, size, show, width, height):
         plt.rcParams['figure.figsize'] = (width, height)
         
         images = {}
@@ -419,28 +417,44 @@ class Comparator:
             round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(self.compressor, function_name)(p)
             images[label] = compressed_image
             print("%s with parameter %d: size %.2f, error %.2g (absolute) %1.2e (relative)" % (label, p, size_fraction, error_a, error_r))
-            
+        
         fig, axs = plt.subplots(nrows=2, ncols=3)
         
-        axs[0][1].imshow(self.image.image)
+        empty = np.zeros(self.image.image.shape)
+        full = np.ones(self.image.image.shape)
+
+        if show == "image":
+            axs[0][1].imshow(self.image.image)
+        else:
+            axs[0][1].imshow(empty)
+        
         axs[0][1].set_xlabel("EXACT", fontweight='bold')
         
         unused_positions = [v for v in self.IMAGE_POSITIONS.values()]
 
         for label, image in images.items():
             i, j = self.IMAGE_POSITIONS[label]
-            axs[i][j].imshow(image.image) # make this more OO
+            
+            if show == "image":
+                axs[i][j].imshow(image.image)
+            else:
+                axs[i][j].imshow(abs(self.image.image - image.image))
+                label += " (error difference)"
+                
             axs[i][j].set_xlabel(label)
             unused_positions.remove((i, j))
-            
-        empty = np.zeros(self.image.image.size).reshape(self.image.image.shape)
+        
         for i, j in unused_positions:
-            axs[i][j].imshow(empty)
+            if show == "image":
+                axs[i][j].imshow(empty)
+            else:
+                axs[i][j].imshow(full)
         
     def widget_images(self):
         return interact(
             self.show_images, 
             size=FloatSlider(value=0.5, min=0, max=1, step=0.01, continuous_update=False, description="Size fraction"),
+            show=Dropdown(options={"Image": "image", "Difference": "difference"}, value="image", description='Show'),
             width=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot width"), 
             height=IntSlider(value=10, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
         )
