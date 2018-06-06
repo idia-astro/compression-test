@@ -3,6 +3,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize, LogNorm
 from scipy import interpolate
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
@@ -14,7 +15,7 @@ import itertools
 import subprocess
 import operator
 
-from ipywidgets import interact, FloatSlider, IntSlider, SelectMultiple, Text, Dropdown
+from ipywidgets import interact, FloatSlider, IntSlider, SelectMultiple, Text, Dropdown, fixed
 
 
 class DataWrapperMixin:
@@ -102,8 +103,8 @@ class Region(DataWrapperMixin):
     def delta_errors(self, other, *functions):
         return self._delta_errors(other, "data", *functions)
     
-    def colourmapped(self, colourmap, vmin=None, vmax=None):
-        return ColourmappedRegion.from_data(self.data, colourmap, vmin, vmax)
+    def colourmapped(self, colourmap, vmin=None, vmax=None, log=False):
+        return ColourmappedRegion.from_data(self.data, colourmap, vmin, vmax, log)
     
 
 
@@ -111,17 +112,18 @@ class ColourmappedRegion(DataWrapperMixin):
     
     ZSCALE = ZScaleInterval()
     
-    def __init__(self, image, colourmap=None, vmin=None, vmax=None):
+    def __init__(self, image, colourmap=None, vmin=None, vmax=None, log=False):
         self.image = image
         self.colourmap = colourmap
         self.vmin = vmin
         self.vmax = vmax
+        self.log = log
     
     @classmethod
-    def from_data(cls, data, colourmap, vmin, vmax):
+    def from_data(cls, data, colourmap, vmin, vmax, log):
         if vmin is None or vmax is None:
             vmin, vmax = cls.ZSCALE.get_limits(data)
-        norm = plt.Normalize(vmin, vmax)
+        norm = LogNorm(vmin, vmax) if log else Normalize(vmin, vmax)
         return cls(colourmap(norm(data))[:, :, :3], colourmap, vmin, vmax)
     
     @classmethod
@@ -139,7 +141,7 @@ class ColourmappedRegion(DataWrapperMixin):
         Image.fromarray((self.image*255).astype(np.uint8)).save(filename, format='JPEG', quality=quality)
         
     def clone_colourmap_to(self, region):
-        return ColourmappedRegion.from_data(region.data, self.colourmap, self.vmin, self.vmax)
+        return ColourmappedRegion.from_data(region.data, self.colourmap, self.vmin, self.vmax, self.log)
         
     def delta_errors(self, other, *functions):
         return self._delta_errors(other, "image", *functions)
@@ -274,12 +276,12 @@ class Comparator:
     ERROR_FUNCTION_NAMES = ("mean", "max", "median")
 
     @classmethod
-    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz"):
+    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", logarithmic=False):
         results = []
         
         original_raw_size = np.dtype("f4").itemsize * region.data.size
         
-        image = region.colourmapped(colourmap)
+        image = region.colourmapped(colourmap, log=logarithmic)
         image.to_png("original.png")
         original_image_size = os.stat("original.png").st_size
         
