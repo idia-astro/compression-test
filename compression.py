@@ -14,7 +14,7 @@ import itertools
 import subprocess
 import operator
 
-from ipywidgets import interact, FloatSlider, IntSlider, SelectMultiple
+from ipywidgets import interact, FloatSlider, IntSlider, SelectMultiple, Text
 
 
 class DataWrapperMixin:
@@ -332,13 +332,26 @@ class Comparator:
     def unique(self, field):
         return {r[field] for r in self.results}
         
-    def plot(self, xfield, yfield, xlabel, ylabel, plt_obj=plt):
+    def plot(self, xfield, yfield, xlabel, ylabel, plt_obj, xmin, xmax, ymin, ymax):
         for label in self.unique("label"):
             xy = sorted(self.get((xfield, yfield), {"label": (label, operator.eq)})) # sort by xfield
-            x, y = zip(*xy)
             
-            if all(v is None for v in y):
+            if all(y is None for x, y in xy):
                 continue # skip e.g. non-existent raw errors for JPEG
+                        
+            if xmin is not None:
+                xy = [(x, y) for x, y in xy if x >= xmin]
+            if xmax is not None:
+                xy = [(x, y) for x, y in xy if x <= xmax]
+            if ymin is not None:
+                xy = [(x, y) for x, y in xy if y >= ymin]
+            if ymax is not None:
+                xy = [(x, y) for x, y in xy if y <= ymax]
+                        
+            if not xy:
+                continue
+            
+            x, y = zip(*xy)
             
             plt_obj.plot(x, y, marker='o', ls='', label=label, color=self.PLOT_COLOURS[label])
             
@@ -351,21 +364,31 @@ class Comparator:
             plt_obj.xlabel(xlabel)
             plt_obj.ylabel(ylabel)
     
-    def show_plots(self, plots, datasets, relative, width, height):
-        # TODO absolute vs relative error
+    def show_plots(self, plots, datasets, relative, xmin, xmax, ymin, ymax, width, height):
         plt.rcParams['figure.figsize'] = (width, height)
         
         nrows = len(plots)
         ncols = len(datasets)
-                
+                        
         fig, axs = plt.subplots(nrows=nrows, ncols=ncols, squeeze=False)
 
         desc = "relative" if relative else "absolute"
         
+        def float_or_none(val):
+            try:
+                return float(val)
+            except ValueError:
+                return None
+        
+        xmin = float_or_none(xmin)
+        xmax = float_or_none(xmax)
+        ymin = float_or_none(ymin)
+        ymax = float_or_none(ymax)
+        
         for i, plot in enumerate(plots):
             for j, dataset in enumerate(datasets):
                 self.plot("size_fraction", "%s_error_%s_%s" % (dataset, plot, desc[:3]), "Size (fraction)", 
-                        "%s error (%s %s)" % (dataset, desc, plot), axs[i][j])
+                        "%s error (%s %s)" % (dataset, desc, plot), axs[i][j], xmin, xmax, ymin, ymax)
                 
     def widget_plots(self):
         return interact(
@@ -373,6 +396,10 @@ class Comparator:
             plots=SelectMultiple(options=self.ERROR_FUNCTION_NAMES, value=["mean", "max"], description="Plots"), 
             datasets=SelectMultiple(options=["raw", "image"], value=["image"], description="Datasets"),
             relative=False,
+            xmin=Text(value="", placeholder="Type a number or leave blank to disable", description='Min x'),
+            xmax=Text(value="", placeholder="Type a number or leave blank to disable", description='Max x'),
+            ymin=Text(value="", placeholder="Type a number or leave blank to disable", description='Min y'),
+            ymax=Text(value="", placeholder="Type a number or leave blank to disable", description='Max y'),
             width=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot width"), 
             height=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
         )
