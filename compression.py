@@ -202,8 +202,10 @@ class Compressor:
             
         self.region.write_to_file("original.arr", "f4")
         
-        subprocess.run((self.sz, "-c", "sz.config", *args, "-f", "-z", "-i", "original.arr", "-2", str(width), str(height)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run((self.sz, "-c", "sz.config", *args, "-f", "-x", "-s", "original.arr.sz", "-2", str(width), str(height)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        config_path = os.path.join(prev, "sz.config")
+        
+        subprocess.run((self.sz, "-c", config_path, *args, "-f", "-z", "-i", "original.arr", "-2", str(width), str(height)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run((self.sz, "-c", config_path, *args, "-f", "-x", "-s", "original.arr.sz", "-2", str(width), str(height)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         compressed_size = os.stat("original.arr.sz").st_size
         round_trip_region = Region.from_file("original.arr.sz.out", "f4", width, height)
