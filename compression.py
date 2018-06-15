@@ -19,9 +19,14 @@ from ipywidgets import interact, FloatSlider, IntSlider, SelectMultiple, Text, D
 
 
 class DataWrapperMixin:
-    def _delta_errors(self, other, dataname, *functions):
+    def _delta_errors(self, other, dataname, *functions, **kwargs):
         self_data = getattr(self, dataname)
         other_data = getattr(other, dataname)
+        
+        mask = kwargs.get("mask", None)
+        if mask is not None:
+            self_data = self_data[mask]
+            other_data = other_data[mask]
         
         with np.warnings.catch_warnings():
             np.warnings.simplefilter("ignore", category=RuntimeWarning)
@@ -77,8 +82,8 @@ class Region(DataWrapperMixin):
     def write_to_file(self, filename, dtype):
         self.data.astype(dtype).tofile(filename)
         
-    def delta_errors(self, other, *functions):
-        return self._delta_errors(other, "data", *functions)
+    def delta_errors(self, other, *functions, **kwargs):
+        return self._delta_errors(other, "data", *functions, **kwargs)
     
     def colourmapped(self, colourmap, vmin=None, vmax=None, log=False):
         return ColourmappedRegion.from_data(self.data, colourmap, vmin, vmax, log)
@@ -120,8 +125,8 @@ class ColourmappedRegion(DataWrapperMixin):
     def clone_colourmap_to(self, region):
         return ColourmappedRegion.from_data(region.data, self.colourmap, self.vmin, self.vmax, self.log)
         
-    def delta_errors(self, other, *functions):
-        return self._delta_errors(other, "image", *functions)
+    def delta_errors(self, other, *functions, **kwargs):
+        return self._delta_errors(other, "image", *functions, **kwargs)
 
 
 def fix_nans(data, method):
@@ -310,7 +315,7 @@ class Comparator:
                 else:
                     raw_errors = [(None, None)] * len(error_functions)
                 
-                image_errors = image.delta_errors(compressed_image, *error_functions)
+                image_errors = image.delta_errors(compressed_image, *error_functions, mask=~np.isnan(original_region.data))
                 
                 for func_name, (raw_abs, raw_rel), (img_abs, img_rel) in zip(cls.ERROR_FUNCTION_NAMES, raw_errors, image_errors):
                     result_dict["raw_error_%s_abs" % func_name] = raw_abs
