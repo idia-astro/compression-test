@@ -47,27 +47,6 @@ class Region(DataWrapperMixin):
     def from_file(cls, filename, dtype, width, height):
         return cls(np.fromfile(filename, dtype=dtype).reshape(width, height))
     
-    @staticmethod
-    def _fix_nans(data):
-        if np.all(np.isnan(data)):
-            raise ValueError("This channel contains only NaNs! Please select a different channel.")
-        
-        print("Number of NaNs (before interpolation):", np.sum(np.isnan(data)))
-        
-        x = np.arange(0, data.shape[1])
-        y = np.arange(0, data.shape[0])
-        data = np.ma.masked_invalid(data)
-        xx, yy = np.meshgrid(x, y)
-        x1 = xx[~data.mask]
-        y1 = yy[~data.mask]
-        new_data = data[~data.mask]
-        
-        data = interpolate.griddata((x1, y1), new_data.ravel(), (xx, yy), method='cubic')
-        
-        print("Number of NaNs (after interpolation):", np.sum(np.isnan(data)))
-    
-        return data
-    
     @classmethod
     def _from_data(cls, data, stokes, channel, size, centre):
         if data.ndim == 4:
@@ -82,9 +61,7 @@ class Region(DataWrapperMixin):
             cx, cy = centre
                 
             data = data[cx - w_2 : cx + w_2, cy - h_2 : cy + h_2]
-            
-        data = cls._fix_nans(data)
-            
+                        
         return cls(data)
     
     @classmethod
@@ -147,7 +124,25 @@ class ColourmappedRegion(DataWrapperMixin):
         return self._delta_errors(other, "image", *functions)
 
 
-# TODO use temporary directory and executable paths
+def fix_nans(data, method):
+    if np.all(np.isnan(data)):
+        raise ValueError("This channel contains only NaNs! Please select a different channel.")
+    
+    print("Number of NaNs (before interpolation):", np.sum(np.isnan(data)))
+    
+    x = np.arange(0, data.shape[1])
+    y = np.arange(0, data.shape[0])
+    data = np.ma.masked_invalid(data)
+    xx, yy = np.meshgrid(x, y)
+    x1 = xx[~data.mask]
+    y1 = yy[~data.mask]
+    new_data = data[~data.mask]
+    
+    data = interpolate.griddata((x1, y1), new_data.ravel(), (xx, yy), method=method)
+    
+    print("Number of NaNs (after interpolation):", np.sum(np.isnan(data)))
+
+    return data
 
 
 class Compressor:
@@ -278,10 +273,14 @@ class Comparator:
     ERROR_FUNCTION_NAMES = ("mean", "max", "median")
 
     @classmethod
-    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", logarithmic=False):
+    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", logarithmic=False, nan_interpolation_method=None):
         results = []
         
         original_raw_size = np.dtype("f4").itemsize * region.data.size
+        original_region = region
+        
+        if nan_interpolation_method is not None:
+            region = Region(fix_nans(region.data, nan_interpolation_method))
         
         image = region.colourmapped(colourmap, log=logarithmic)
         image.to_png("original.png")
@@ -306,7 +305,8 @@ class Comparator:
                 
                 if round_trip_region:
                     # these are (absolute, relative) pairs
-                    raw_errors = region.delta_errors(round_trip_region, *error_functions)
+                    # We compare the raw data to the original raw data *before* nans are interpolated
+                    raw_errors = original_region.delta_errors(round_trip_region, *error_functions)
                 else:
                     raw_errors = [(None, None)] * len(error_functions)
                 
