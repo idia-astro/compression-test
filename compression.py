@@ -159,7 +159,19 @@ class Compressor:
         self.temp_dir = os.path.abspath(temp_dir)
         self.zfp = zfp
         self.sz = sz
-
+        
+    def dummy_compress(self, *args):
+        prev = os.getcwd()
+        os.chdir(self.temp_dir)
+        width, height = self.region.data.shape
+        self.region.write_to_file("original.arr", "f4")
+        round_trip_region = Region.from_file("original.arr", "f4", width, height)
+        compressed_size = os.stat("original.arr").st_size
+        subprocess.run(("rm", "original.arr"))
+        compressed_image = self.image.clone_colourmap_to(round_trip_region)        
+        os.chdir(prev)
+        return round_trip_region, compressed_image, compressed_size, None
+        
     def ZFP_compress(self, *args):
         prev = os.getcwd()
         os.chdir(self.temp_dir)
@@ -255,15 +267,17 @@ class Comparator:
                     5e-5, 2e-5, 1e-5, 5e-6, 2e-6, 1e-6, 5e-7, 2e-7, 1e-7
                 ]
             ),
-        ("SZ (PSNR bounded)", "SZ_compress_PSNR", range(60, 100)),
+        ("SZ (PSNR bounded)", "SZ_compress_PSNR", range(60, 200)),
+        ("Dummy Compression", "dummy_compress", range(1, 2)),
         ("JPEG", "JPG_compress_quality", range(60, 101)),
     )
         
     PLOT_COLOURS = {
         "ZFP (Fixed rate)": "red",
         "ZFP (Fixed precision)": "orange",
-        "ZFP (Fixed accuracy)": "yellow",
+        "ZFP (Fixed accuracy)": "purple",
         "SZ (PSNR bounded)": "green",
+        "Dummy Compression": "pink",
         "JPEG": "blue",
     }
         
@@ -273,6 +287,7 @@ class Comparator:
         "ZFP (Fixed accuracy)": (1, 2),
         "SZ (PSNR bounded)": (0, 0),
         "JPEG": (0, 2),
+        "Dummy Compression": (2, 0),
     }
     
     ERROR_FUNCTION_NAMES = ("mean", "max", "median")
@@ -411,7 +426,7 @@ class Comparator:
             height=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
         )
 
-    def show_images(self, size, show, width, height):
+    def show_images(self, size, show, width, height, diffOffset, diffScale):
         plt.rcParams['figure.figsize'] = (width, height)
         
         images = {}
@@ -427,7 +442,7 @@ class Comparator:
             images[label] = compressed_image
             print("%s with parameter %d: size %.2f, error %.2g (absolute) %1.2e (relative)" % (label, p, size_fraction, error_a, error_r))
         
-        fig, axs = plt.subplots(nrows=2, ncols=3)
+        fig, axs = plt.subplots(nrows=3, ncols=3)
         
         empty = np.zeros(self.image.image.shape)
         full = np.ones(self.image.image.shape)
@@ -435,7 +450,7 @@ class Comparator:
         if show == "image":
             axs[0][1].imshow(self.image.image)
         else:
-            axs[0][1].imshow(empty)
+            axs[0][1].imshow(diffOffset + 0 * self.image.image)
         
         axs[0][1].set_xlabel("EXACT", fontweight='bold')
         
@@ -447,7 +462,7 @@ class Comparator:
             if show == "image":
                 axs[i][j].imshow(image.image)
             else:
-                axs[i][j].imshow(abs(self.image.image - image.image))
+                axs[i][j].imshow((diffOffset + diffScale*(self.image.image - image.image)))
                 label += " (error difference)"
                 
             axs[i][j].set_xlabel(label)
@@ -465,5 +480,7 @@ class Comparator:
             size=FloatSlider(value=0.5, min=0, max=1, step=0.01, continuous_update=False, description="Size fraction"),
             show=Dropdown(options={"Image": "image", "Difference": "difference"}, value="image", description='Show'),
             width=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot width"), 
-            height=IntSlider(value=10, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
+            height=IntSlider(value=10, min=5, max=50, step=1, continuous_update=False, description="Subplot height"),
+            diffOffset=IntSlider(value=127, min=0, max=255, step=1, continuous_update=False, description="Diff offset"),
+            diffScale=IntSlider(value=10, min=1, max=100, step=1, continuous_update=False, description="Diff scaling factor")
         )
