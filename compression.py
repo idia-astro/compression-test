@@ -110,7 +110,7 @@ class ColourmappedRegion(DataWrapperMixin):
     
     @classmethod
     def from_png(cls, filename):
-        return cls(plt.imread(filename))
+        return cls(plt.imread(filename)[:, :, :3])
     
     @classmethod
     def from_jpg(cls, filename):
@@ -152,13 +152,15 @@ def fix_nans(data, method):
 
 class Compressor:
     
-    def __init__(self, region, image, temp_dir=".", zfp="zfp", sz="sz"):
+    def __init__(self, region, image, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec"):
         self.region = region
         self.image = image
         
         self.temp_dir = os.path.abspath(temp_dir)
         self.zfp = zfp
         self.sz = sz
+        self.bpgenc = bpgenc
+        self.bpgdec = bpgdec
 
     def ZFP_compress(self, *args):
         prev = os.getcwd()
@@ -238,6 +240,27 @@ class Compressor:
 
     def JPG_compress_quality(self, quality):
         return self.JPG_compress(quality)
+    
+    def BPG_compress(self, *args):
+        prev = os.getcwd()
+        os.chdir(self.temp_dir)
+        
+        self.image.to_png("uncompressed.png")
+        subprocess.run((self.bpgenc, *args, "uncompressed.png", "-o", "compressed.bpg"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        compressed_size = os.stat("compressed.bpg").st_size
+        
+        subprocess.run((self.bpgdec, "compressed.bpg", "-o", "round_trip.png"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        compressed_image = ColourmappedRegion.from_png("round_trip.png")
+        
+        subprocess.run(("rm", "compressed.bpg"))
+        subprocess.run(("rm", "round_trip.png"))
+        
+        os.chdir(prev)
+        return None, compressed_image, None, compressed_size
+    
+    def BPG_compress_quantiser(self, quantiser):
+        return self.BPG_compress("-q", str(quantiser))
 
 
 class Comparator:
@@ -257,6 +280,7 @@ class Comparator:
             ),
         ("SZ (PSNR bounded)", "SZ_compress_PSNR", range(60, 100)),
         ("JPEG", "JPG_compress_quality", range(60, 101)),
+        ("BPG (quantizer)", "BPG_compress_quantiser", range(52)),
     )
         
     PLOT_COLOURS = {
@@ -265,6 +289,7 @@ class Comparator:
         "ZFP (Fixed accuracy)": "yellow",
         "SZ (PSNR bounded)": "green",
         "JPEG": "blue",
+        "BPG (quantizer)": "magenta",
     }
         
     IMAGE_POSITIONS = {
@@ -273,12 +298,13 @@ class Comparator:
         "ZFP (Fixed accuracy)": (1, 2),
         "SZ (PSNR bounded)": (0, 0),
         "JPEG": (0, 2),
+        "BPG (quantizer)": (2, 0),
     }
     
     ERROR_FUNCTION_NAMES = ("mean", "max", "median")
 
     @classmethod
-    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", logarithmic=False, nan_interpolation_method=None):
+    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec", logarithmic=False, nan_interpolation_method=None):
         results = []
         
         original_raw_size = np.dtype("f4").itemsize * region.data.size
@@ -291,7 +317,7 @@ class Comparator:
         image.to_png("original.png")
         original_image_size = os.stat("original.png").st_size
         
-        compressor = Compressor(region, image, temp_dir, zfp, sz)
+        compressor = Compressor(region, image, temp_dir, zfp, sz, bpgenc, bpgdec)
                 
         for label, function_name, params in cls.ALGORITHMS:
             
@@ -427,7 +453,7 @@ class Comparator:
             images[label] = compressed_image
             print("%s with parameter %d: size %.2f, error %.2g (absolute) %1.2e (relative)" % (label, p, size_fraction, error_a, error_r))
         
-        fig, axs = plt.subplots(nrows=2, ncols=3)
+        fig, axs = plt.subplots(nrows=3, ncols=3)
         
         empty = np.zeros(self.image.image.shape)
         full = np.ones(self.image.image.shape)
@@ -458,6 +484,9 @@ class Comparator:
                 axs[i][j].imshow(empty)
             else:
                 axs[i][j].imshow(full)
+                
+        axs[2][1].imshow(empty)
+        axs[2][2].imshow(empty)
         
     def widget_images(self):
         return interact(
