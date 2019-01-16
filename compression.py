@@ -15,7 +15,7 @@ import itertools
 import subprocess
 import operator
 
-from ipywidgets import interact, FloatSlider, IntSlider, SelectMultiple, Text, Dropdown, fixed
+from ipywidgets import interact, Checkbox, FloatSlider, IntSlider, SelectMultiple, Text, Dropdown, fixed
 
 
 class DataWrapperMixin:
@@ -512,9 +512,7 @@ class Comparator:
             height=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
         )
 
-    def show_images(self, size, show, width, height):
-        plt.rcParams['figure.figsize'] = (width, height)
-        
+    def show_images(self, size, show, width, height, native=False):        
         images = {}
 
         for label in self.unique("label"):
@@ -527,6 +525,14 @@ class Comparator:
             round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(self.compressor, function_name)(p)
             images[label] = compressed_image
             print("%s with parameter %d: size %.2f, error %.2g (absolute) %1.2e (relative)" % (label, p, size_fraction, error_a, error_r))
+            
+        if native:
+            x, y = list(images.values())[0].image.shape[:2] 
+            dpi = plt.rcParams['figure.dpi']
+            width, height = x * 3 / dpi, y * 3 / dpi
+            
+        
+        plt.rcParams['figure.figsize'] = (width, height)
         
         fig, axs = plt.subplots(nrows=3, ncols=3)
         
@@ -534,7 +540,7 @@ class Comparator:
         full = np.ones(self.image.image.shape)
 
         if show == "image":
-            axs[0][1].imshow(self.image.image)
+            axs[0][1].imshow(self.image.image, interpolation='none')
         else:
             axs[0][1].imshow(empty)
         
@@ -546,9 +552,9 @@ class Comparator:
             i, j = self.IMAGE_POSITIONS[label]
             
             if show == "image":
-                axs[i][j].imshow(image.image)
+                axs[i][j].imshow(image.image, interpolation='none')
             else:
-                axs[i][j].imshow(abs(self.image.image - image.image))
+                axs[i][j].imshow(abs(self.image.image - image.image), interpolation='none')
                 label += " (error difference)"
                 
             axs[i][j].set_xlabel(label)
@@ -569,5 +575,6 @@ class Comparator:
             size=FloatSlider(value=0.5, min=0, max=1, step=0.01, continuous_update=False, description="Size fraction"),
             show=Dropdown(options={"Image": "image", "Difference": "difference"}, value="image", description='Show'),
             width=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot width"), 
-            height=IntSlider(value=10, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
+            height=IntSlider(value=10, min=5, max=50, step=1, continuous_update=False, description="Subplot height"),
+            native=Checkbox(value=False, description='Native resolution')
         )
