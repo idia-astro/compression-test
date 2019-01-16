@@ -15,7 +15,7 @@ import itertools
 import subprocess
 import operator
 
-from ipywidgets import interact, Checkbox, FloatSlider, IntSlider, SelectMultiple, Text, Dropdown, fixed
+from ipywidgets import interact, Checkbox, FloatSlider, IntSlider, IntText, SelectMultiple, Text, Dropdown, Select, fixed
 
 
 class DataWrapperMixin:
@@ -157,6 +157,9 @@ class ColourmappedRegion(DataWrapperMixin):
     
     def tiles(self, tile_size):
         return self._tiles(tile_size)
+    
+    def display(self):
+        Image.fromarray((self.image*255).astype(np.uint8)).show()
 
 
 def fix_nans(data, method):
@@ -335,10 +338,9 @@ class Comparator:
         self.compressor = compressor
     
     ALGORITHMS = {
-        "ZFP R": ["ZFP (Fixed rate)", "ZFP_compress_fixed_rate", range(1, 32+1)],
-        "ZFP P": ["ZFP (Fixed precision)", "ZFP_compress_fixed_precision", range(1, 32+1)],
-        "ZFP A": [
-                "ZFP (Fixed accuracy)",
+        "ZFP (Fixed rate)": ["ZFP_compress_fixed_rate", range(1, 32+1)],
+        "ZFP (Fixed precision)": ["ZFP_compress_fixed_precision", range(1, 32+1)],
+        "ZFP (Fixed accuracy)": [
                 "ZFP_compress_fixed_accuracy",
                 list(range(1, 21)) + [
                     0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1,
@@ -346,10 +348,16 @@ class Comparator:
                     5e-5, 2e-5, 1e-5, 5e-6, 2e-6, 1e-6, 5e-7, 2e-7, 1e-7
                 ]
             ],
-        "SZ": ["SZ (PSNR bounded)", "SZ_compress_PSNR", range(60, 100)],
-        "JPEG": ["JPEG", "JPG_compress_quality", range(60, 101)],
-        "BPG": ["BPG (quantizer)", "BPG_compress_quantiser", range(52)],
+        "SZ (PSNR bounded)": ["SZ_compress_PSNR", range(60, 100)],
+        "JPEG": ["JPG_compress_quality", range(60, 101)],
+        "BPG (quantizer)": ["BPG_compress_quantiser", range(52)],
     }
+    
+    # Uncomment for testing during development
+    #ALGORITHMS = {
+        #"ZFP (Fixed rate)": ["ZFP_compress_fixed_rate", range(1, 32+1, 10)],
+        #"JPEG": ["JPG_compress_quality", range(60, 101, 10)],
+    #}
         
     PLOT_COLOURS = {
         "ZFP (Fixed rate)": "red",
@@ -358,15 +366,6 @@ class Comparator:
         "SZ (PSNR bounded)": "green",
         "JPEG": "blue",
         "BPG (quantizer)": "magenta",
-    }
-        
-    IMAGE_POSITIONS = {
-        "ZFP (Fixed rate)": (1, 0),
-        "ZFP (Fixed precision)": (1, 1),
-        "ZFP (Fixed accuracy)": (1, 2),
-        "SZ (PSNR bounded)": (0, 0),
-        "JPEG": (0, 2),
-        "BPG (quantizer)": (2, 0),
     }
     
     ERROR_FUNCTION_NAMES = ("mean", "max", "median")
@@ -391,10 +390,10 @@ class Comparator:
         
         compressor = Compressor(region, image, temp_dir, zfp, sz, bpgenc, bpgdec)
         
-        if bpg_quant_step > 1:
-            cls.ALGORITHMS["BPG"][2] = range(0, 52, bpg_quant_step)
+        if bpg_quant_step > 1 and "BPG (quantizer)" in cls.ALGORITHMS:
+            cls.ALGORITHMS["BPG (quantizer)"][1] = range(0, 52, bpg_quant_step)
                 
-        for label, function_name, params in cls.ALGORITHMS.values():
+        for label, (function_name, params) in cls.ALGORITHMS.items():
             
             for p in params:
                 result_dict = {
@@ -402,6 +401,8 @@ class Comparator:
                     "function_name": function_name, # may need it later to regenerate images
                     "param": p, # may need it later to regenerate images}
                 }
+                
+                print("Running algorithm %s with parameter %d..." % (label, p))
                 
                 round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(compressor, function_name)(p)
                 
@@ -512,69 +513,46 @@ class Comparator:
             height=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
         )
 
-    def show_images(self, size, show, width, height, native=False):        
-        images = {}
-
-        for label in self.unique("label"):
+    def show_images(self, size, show, algorithm):
+        label = algorithm
+        
+        if not algorithm.startswith("None"):
             results = sorted(self.get(("size_fraction", "function_name", "param", "image_error_mean_abs", "image_error_mean_rel"), {"label": (label, operator.eq), "size_fraction": (size, operator.le)}))
             
-            if not results:
-                continue
+            selected_image = None
             
-            size_fraction, function_name, p, error_a, error_r = results[-1]
-            round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(self.compressor, function_name)(p)
-            images[label] = compressed_image
-            print("%s with parameter %d: size %.2f, error %.2g (absolute) %1.2e (relative)" % (label, p, size_fraction, error_a, error_r))
-            
-        if native:
-            x, y = list(images.values())[0].image.shape[:2] 
-            dpi = plt.rcParams['figure.dpi']
-            width, height = x * 3 / dpi, y * 3 / dpi
-            
+            if results:
+                size_fraction, function_name, p, error_a, error_r = results[-1]
+                round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(self.compressor, function_name)(p)
+                print("%s with parameter %d: size %.2f, error %.2g (absolute) %1.2e (relative)" % (label, p, size_fraction, error_a, error_r))
+                selected_image = compressed_image
         
-        plt.rcParams['figure.figsize'] = (width, height)
+        empty = Image.fromarray(np.zeros(self.image.image.shape).astype(np.uint8))
+        full = Image.fromarray((np.ones(self.image.image.shape) * 255).astype(np.uint8))
         
-        fig, axs = plt.subplots(nrows=3, ncols=3)
-        
-        empty = np.zeros(self.image.image.shape)
-        full = np.ones(self.image.image.shape)
-
-        if show == "image":
-            axs[0][1].imshow(self.image.image, interpolation='none')
-        else:
-            axs[0][1].imshow(empty)
-        
-        axs[0][1].set_xlabel("EXACT", fontweight='bold')
-        
-        unused_positions = [v for v in self.IMAGE_POSITIONS.values()]
-
-        for label, image in images.items():
-            i, j = self.IMAGE_POSITIONS[label]
-            
+        if algorithm.startswith("None"): # exact image
             if show == "image":
-                axs[i][j].imshow(image.image, interpolation='none')
-            else:
-                axs[i][j].imshow(abs(self.image.image - image.image), interpolation='none')
-                label += " (error difference)"
+                self.image.display()
+            else: # we're showing the difference
+                empty.show()
                 
-            axs[i][j].set_xlabel(label)
-            unused_positions.remove((i, j))
-        
-        for i, j in unused_positions:
+        elif selected_image is None: # No image found for this algorithm
             if show == "image":
-                axs[i][j].imshow(empty)
-            else:
-                axs[i][j].imshow(full)
+                empty.show()
+            else: # we're showing the difference
+                full.show()
                 
-        axs[2][1].imshow(empty)
-        axs[2][2].imshow(empty)
-        
+        else: # image found
+            if show == "image":
+                selected_image.display()
+            else:
+                diff = self.image.image - selected_image.image + 0.5
+                Image.fromarray((diff * 255).astype(np.uint8)).show()
+                        
     def widget_images(self):
         return interact(
             self.show_images, 
             size=FloatSlider(value=0.5, min=0, max=1, step=0.01, continuous_update=False, description="Size fraction"),
-            show=Dropdown(options={"Image": "image", "Difference": "difference"}, value="image", description='Show'),
-            width=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot width"), 
-            height=IntSlider(value=10, min=5, max=50, step=1, continuous_update=False, description="Subplot height"),
-            native=Checkbox(value=False, description='Native resolution')
+            show=Select(options={"Image": "image", "Difference": "difference"}, value="image", description='Show'),
+            algorithm=Select(options=['None (exact)'] + list(self.ALGORITHMS.keys()), value='JPEG', description='Algorithm')
         )
