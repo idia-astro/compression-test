@@ -268,20 +268,23 @@ class Comparator:
         self.image = image
         self.results = results
         self.compressor = compressor
-
-    ALGORITHMS = (
-        ("ZFP (Fixed rate)", "ZFP_compress_fixed_rate", range(1, 32+1)),
-        ("ZFP (Fixed precision)", "ZFP_compress_fixed_precision", range(1, 32+1)),
-        ("ZFP (Fixed accuracy)", "ZFP_compress_fixed_accuracy", list(range(1, 21)) + [
+    
+    ALGORITHMS = {
+        "ZFP R": ["ZFP (Fixed rate)", "ZFP_compress_fixed_rate", range(1, 32+1)],
+        "ZFP P": ["ZFP (Fixed precision)", "ZFP_compress_fixed_precision", range(1, 32+1)],
+        "ZFP A": [
+                "ZFP (Fixed accuracy)",
+                "ZFP_compress_fixed_accuracy",
+                list(range(1, 21)) + [
                     0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1,
                     5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3, 5e-4, 2e-4, 1e-4, 
                     5e-5, 2e-5, 1e-5, 5e-6, 2e-6, 1e-6, 5e-7, 2e-7, 1e-7
                 ]
-            ),
-        ("SZ (PSNR bounded)", "SZ_compress_PSNR", range(60, 100)),
-        ("JPEG", "JPG_compress_quality", range(60, 101)),
-        ("BPG (quantizer)", "BPG_compress_quantiser", range(52)),
-    )
+            ],
+        "SZ": ["SZ (PSNR bounded)", "SZ_compress_PSNR", range(60, 100)],
+        "JPEG": ["JPEG", "JPG_compress_quality", range(60, 101)],
+        "BPG": ["BPG (quantizer)", "BPG_compress_quantiser", range(52)],
+    }
         
     PLOT_COLOURS = {
         "ZFP (Fixed rate)": "red",
@@ -304,7 +307,7 @@ class Comparator:
     ERROR_FUNCTION_NAMES = ("mean", "max", "median")
 
     @classmethod
-    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec", logarithmic=False, nan_interpolation_method=None):
+    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec", logarithmic=False, nan_interpolation_method=None, bpg_quant_step=4):
         results = []
         
         original_raw_size = np.dtype("f4").itemsize * region.data.size
@@ -318,8 +321,11 @@ class Comparator:
         original_image_size = os.stat("original.png").st_size
         
         compressor = Compressor(region, image, temp_dir, zfp, sz, bpgenc, bpgdec)
+        
+        if bpg_quant_step > 1:
+            cls.ALGORITHMS["BPG"][2] = range(0, 52, bpg_quant_step)
                 
-        for label, function_name, params in cls.ALGORITHMS:
+        for label, function_name, params in cls.ALGORITHMS.values():
             
             for p in params:
                 result_dict = {
