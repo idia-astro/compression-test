@@ -19,9 +19,9 @@ from ipywidgets import interact, FloatSlider, IntSlider, SelectMultiple, Text, D
 
 
 class DataWrapperMixin:
-    def _delta_errors(self, other, dataname, *functions, **kwargs):
-        self_data = getattr(self, dataname)
-        other_data = getattr(other, dataname)
+    def _delta_errors(self, other, *functions, **kwargs):
+        self_data = getattr(self, self.DATANAME)
+        other_data = getattr(other, self.DATANAME)
         
         mask = kwargs.get("mask", None)
         if mask is not None:
@@ -43,8 +43,33 @@ class DataWrapperMixin:
         
         # these functions should exclude nans -- nanmean, nanmax, etc.
         return tuple(zip(absolute_errors, relative_errors))
+    
+    @classmethod
+    def from_tiles(cls, tiles, shape):
+        x, y = shape[:2]
+        data = np.empty(shape)
+        
+        tile_size = getattr(tiles[0], cls.DATANAME).shape[0]
+        
+        for i in range(0, x, tile_size):
+            for j in range(0, y, tile_size):
+                data[i : i + tile_size, j : j + tile_size] = getattr(tiles.pop(0), cls.DATANAME)
+                
+        return cls(data)
+    
+    def _tiles(self, tile_size):
+        data = getattr(self, self.DATANAME)
+        cls = self.__class__
+        x, y = data.shape[:2]
+        
+        for i in range(0, x, tile_size):
+            for j in range(0, y, tile_size):
+                yield cls(data[i : i + tile_size, j : j + tile_size])
+
 
 class Region(DataWrapperMixin):
+    DATANAME = "data"
+    
     def __init__(self, data):
         self.data = data
         
@@ -83,15 +108,17 @@ class Region(DataWrapperMixin):
         self.data.astype(dtype).tofile(filename)
         
     def delta_errors(self, other, *functions, **kwargs):
-        return self._delta_errors(other, "data", *functions, **kwargs)
+        return self._delta_errors(other, *functions, **kwargs)
     
     def colourmapped(self, colourmap, vmin=None, vmax=None, log=False):
         return ColourmappedRegion.from_data(self.data, colourmap, vmin, vmax, log)
     
+    def tiles(self, tile_size):
+        return self._tiles(tile_size)
 
 
 class ColourmappedRegion(DataWrapperMixin):
-    
+    DATANAME = "image"
     ZSCALE = ZScaleInterval()
     
     def __init__(self, image, colourmap=None, vmin=None, vmax=None, log=False):
@@ -126,7 +153,10 @@ class ColourmappedRegion(DataWrapperMixin):
         return ColourmappedRegion.from_data(region.data, self.colourmap, self.vmin, self.vmax, self.log)
         
     def delta_errors(self, other, *functions, **kwargs):
-        return self._delta_errors(other, "image", *functions, **kwargs)
+        return self._delta_errors(other, *functions, **kwargs)
+    
+    def tiles(self, tile_size):
+        return self._tiles(tile_size)
 
 
 def fix_nans(data, method):
@@ -152,7 +182,7 @@ def fix_nans(data, method):
 
 class Compressor:
     
-    def __init__(self, region, image, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec"):
+    def __init__(self, region, image, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec", tile_size=128):
         self.region = region
         self.image = image
         
@@ -161,27 +191,35 @@ class Compressor:
         self.sz = sz
         self.bpgenc = bpgenc
         self.bpgdec = bpgdec
+        
+        self.tile_size = tile_size
 
     def ZFP_compress(self, *args):
         prev = os.getcwd()
         os.chdir(self.temp_dir)
         
-        width, height = self.region.data.shape
-        
-        self.region.write_to_file("original.arr", "f4")
-        
-        zip_p = subprocess.Popen((self.zfp, "-i", "original.arr", "-2", str(width), str(height), "-f", *args, "-z", "-"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        unzip_p = subprocess.Popen((self.zfp, "-z", "-", "-2", str(width), str(height), "-f", *args ,"-o", "round_trip.arr"), stdin=zip_p.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        zip_p.stdout.close()
-        
-        m = re.search("zfp=(\d+)", unzip_p.communicate()[1].decode())
-        compressed_size = int(m.group(1))
-        
-        round_trip_region = Region.from_file("round_trip.arr", "f4", width, height)
-        
-        subprocess.run(("rm", "original.arr"))
-        subprocess.run(("rm", "round_trip.arr"))
-        
+        round_trip_tiles = []
+        compressed_size = 0
+                
+        for i, tile in enumerate(self.region.tiles(self.tile_size)):
+            orig_name = "original_%d.arr" % i
+            round_trip_name = "round_trip_%d.arr" % i            
+            
+            tile.write_to_file(orig_name, "f4")
+            
+            zip_p = subprocess.Popen((self.zfp, "-i", orig_name, "-2", str(self.tile_size), str(self.tile_size), "-f", *args, "-z", "-"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            unzip_p = subprocess.Popen((self.zfp, "-z", "-", "-2", str(self.tile_size), str(self.tile_size), "-f", *args ,"-o", round_trip_name), stdin=zip_p.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            zip_p.stdout.close()
+            
+            m = re.search("zfp=(\d+)", unzip_p.communicate()[1].decode())
+            compressed_size += int(m.group(1))
+            
+            round_trip_tiles.append(Region.from_file(round_trip_name, "f4", self.tile_size, self.tile_size))
+            
+            subprocess.run(("rm", orig_name))
+            subprocess.run(("rm", round_trip_name))
+            
+        round_trip_region = Region.from_tiles(round_trip_tiles, self.region.data.shape)
         compressed_image = self.image.clone_colourmap_to(round_trip_region)
         
         os.chdir(prev)
@@ -200,22 +238,29 @@ class Compressor:
         prev = os.getcwd()
         os.chdir(self.temp_dir)
         
-        width, height = self.region.data.shape
+        round_trip_tiles = []
+        compressed_size = 0
+                
+        for i, tile in enumerate(self.region.tiles(self.tile_size)):
+            orig_name = "original_%d.arr" % i
+            comp_name = "original_%d.arr.sz" % i
+            round_trip_name = "original_%d.arr.sz.out" % i
             
-        self.region.write_to_file("original.arr", "f4")
-        
-        config_path = os.path.join(prev, "sz.config")
-        
-        subprocess.run((self.sz, "-c", config_path, *args, "-f", "-z", "-i", "original.arr", "-2", str(width), str(height)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run((self.sz, "-c", config_path, *args, "-f", "-x", "-s", "original.arr.sz", "-2", str(width), str(height)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        compressed_size = os.stat("original.arr.sz").st_size
-        round_trip_region = Region.from_file("original.arr.sz.out", "f4", width, height)
+            tile.write_to_file(orig_name, "f4")
+            
+            config_path = os.path.join(prev, "sz.config")
+            
+            subprocess.run((self.sz, "-c", config_path, *args, "-f", "-z", "-i", orig_name, "-2", str(self.tile_size), str(self.tile_size)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run((self.sz, "-c", config_path, *args, "-f", "-x", "-s", comp_name, "-2", str(self.tile_size), str(self.tile_size)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            compressed_size += os.stat(comp_name).st_size
+            round_trip_tiles.append(Region.from_file(round_trip_name, "f4", self.tile_size, self.tile_size))
 
-        subprocess.run(("rm", "original.arr"))
-        subprocess.run(("rm", "original.arr.sz"))
-        subprocess.run(("rm", "original.arr.sz.out"))
+            subprocess.run(("rm", orig_name))
+            subprocess.run(("rm", comp_name))
+            subprocess.run(("rm", round_trip_name))
         
+        round_trip_region = Region.from_tiles(round_trip_tiles, self.region.data.shape)
         compressed_image = self.image.clone_colourmap_to(round_trip_region)
         
         os.chdir(prev)
@@ -228,12 +273,20 @@ class Compressor:
         prev = os.getcwd()
         os.chdir(self.temp_dir)
         
-        self.image.to_jpg("compressed.jpg", args[0])
+        compressed_tiles = []
+        compressed_size = 0
         
-        compressed_size = os.stat("compressed.jpg").st_size
-        compressed_image = ColourmappedRegion.from_jpg("compressed.jpg")
+        for i, tile in enumerate(self.image.tiles(self.tile_size)):
+            comp_name = "compressed_%d.jpg" % i
+        
+            tile.to_jpg(comp_name, args[0])
+        
+            compressed_size += os.stat(comp_name).st_size
+            compressed_tiles.append(ColourmappedRegion.from_jpg(comp_name))
 
-        subprocess.run(("rm", "compressed.jpg"))
+            subprocess.run(("rm", comp_name))
+            
+        compressed_image = ColourmappedRegion.from_tiles(compressed_tiles, self.image.image.shape)
         
         os.chdir(prev)
         return None, compressed_image, None, compressed_size
@@ -245,16 +298,28 @@ class Compressor:
         prev = os.getcwd()
         os.chdir(self.temp_dir)
         
-        self.image.to_png("uncompressed.png")
-        subprocess.run((self.bpgenc, *args, "uncompressed.png", "-o", "compressed.bpg"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        compressed_tiles = []
+        compressed_size = 0
         
-        compressed_size = os.stat("compressed.bpg").st_size
+        for i, tile in enumerate(self.image.tiles(self.tile_size)):
+            orig_name = "uncompressed_%d.png" % i
+            comp_name = "compressed_%d.bpg" % i
+            round_trip_name = "round_trip_%d.png" % i
         
-        subprocess.run((self.bpgdec, "compressed.bpg", "-o", "round_trip.png"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        compressed_image = ColourmappedRegion.from_png("round_trip.png")
+            tile.to_png(orig_name)
+            subprocess.run((self.bpgenc, *args, orig_name, "-o", comp_name), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            compressed_size += os.stat(comp_name).st_size
+            
+            subprocess.run((self.bpgdec, comp_name, "-o", round_trip_name), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            compressed_tiles.append(ColourmappedRegion.from_png(round_trip_name))
+            
+            subprocess.run(("rm", orig_name))
+            subprocess.run(("rm", comp_name))
+            subprocess.run(("rm", round_trip_name))
         
-        subprocess.run(("rm", "compressed.bpg"))
-        subprocess.run(("rm", "round_trip.png"))
+        compressed_image = ColourmappedRegion.from_tiles(compressed_tiles, self.image.image.shape)
         
         os.chdir(prev)
         return None, compressed_image, None, compressed_size
@@ -307,7 +372,11 @@ class Comparator:
     ERROR_FUNCTION_NAMES = ("mean", "max", "median")
 
     @classmethod
-    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec", logarithmic=False, nan_interpolation_method=None, bpg_quant_step=4):
+    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec", logarithmic=False, nan_interpolation_method=None, bpg_quant_step=4, tile_size=128):
+        for d in region.data.shape:
+            if d % tile_size:
+                raise ValueError("Image dimension %d is not divisible by tile size %d. Aborting." % (d, tile_size))
+        
         results = []
         
         original_raw_size = np.dtype("f4").itemsize * region.data.size
