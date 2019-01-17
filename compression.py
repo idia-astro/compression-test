@@ -211,20 +211,20 @@ class Compressor:
                 
         for i, tile in enumerate(self.region.tiles(self.tile_size)):
             orig_name = "original_%d.arr" % i
+            comp_name = "original_%d.arr.zfp" % i
+            gzip_name = comp_name + ".gz"
             round_trip_name = "round_trip_%d.arr" % i            
             
             tile.write_to_file(orig_name, "f4")
             
-            zip_p = subprocess.Popen((self.zfp, "-i", orig_name, "-2", str(self.tile_size), str(self.tile_size), "-f", *args, "-z", "-"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            unzip_p = subprocess.Popen((self.zfp, "-z", "-", "-2", str(self.tile_size), str(self.tile_size), "-f", *args ,"-o", round_trip_name), stdin=zip_p.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            zip_p.stdout.close()
-            
-            m = re.search("zfp=(\d+)", unzip_p.communicate()[1].decode())
-            compressed_size += int(m.group(1))
-            
+            subprocess.run((self.zfp, "-i", orig_name, "-2", str(self.tile_size), str(self.tile_size), "-f", *args, "-z", comp_name), stdout=subprocess.PIPE, stderr=subprocess.PIPE)            
+            subprocess.run((self.zfp, "-z", comp_name, "-2", str(self.tile_size), str(self.tile_size), "-f", *args ,"-o", round_trip_name), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(("gzip", "-1", comp_name))
+            compressed_size += os.stat(gzip_name).st_size
             round_trip_tiles.append(Region.from_file(round_trip_name, "f4", self.tile_size, self.tile_size))
             
             subprocess.run(("rm", orig_name))
+            subprocess.run(("rm", gzip_name))
             subprocess.run(("rm", round_trip_name))
             
         round_trip_region = Region.from_tiles(round_trip_tiles, self.region.data.shape)
@@ -252,20 +252,20 @@ class Compressor:
         for i, tile in enumerate(self.region.tiles(self.tile_size)):
             orig_name = "original_%d.arr" % i
             comp_name = "original_%d.arr.sz" % i
+            gzip_name = comp_name + ".gz"
             round_trip_name = "original_%d.arr.sz.out" % i
             
             tile.write_to_file(orig_name, "f4")
             
             config_path = os.path.join(prev, "sz.config")
-            
             subprocess.run((self.sz, "-c", config_path, *args, "-f", "-z", "-i", orig_name, "-2", str(self.tile_size), str(self.tile_size)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             subprocess.run((self.sz, "-c", config_path, *args, "-f", "-x", "-s", comp_name, "-2", str(self.tile_size), str(self.tile_size)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            
-            compressed_size += os.stat(comp_name).st_size
+            subprocess.run(("gzip", "-1", comp_name))
+            compressed_size += os.stat(gzip_name).st_size
             round_trip_tiles.append(Region.from_file(round_trip_name, "f4", self.tile_size, self.tile_size))
 
             subprocess.run(("rm", orig_name))
-            subprocess.run(("rm", comp_name))
+            subprocess.run(("rm", gzip_name))
             subprocess.run(("rm", round_trip_name))
         
         round_trip_region = Region.from_tiles(round_trip_tiles, self.region.data.shape)
@@ -433,7 +433,7 @@ class Comparator:
                 if compressed_raw_size:
                     result_dict["size_fraction"] = compressed_raw_size/original_raw_size
                 elif compressed_image_size:
-                    result_dict["size_fraction"] = compressed_image_size/original_image_size
+                    result_dict["size_fraction"] = compressed_image_size/original_raw_size
                 
                 results.append(result_dict)
 
