@@ -132,8 +132,13 @@ class ColourmappedRegion(DataWrapperMixin):
     def from_data(cls, data, colourmap, vmin, vmax, log):
         if vmin is None or vmax is None:
             vmin, vmax = cls.ZSCALE.get_limits(data)
-        norm = LogNorm(vmin, vmax) if log else Normalize(vmin, vmax)
-        return cls(colourmap(norm(data))[:, :, :3], colourmap, vmin, vmax)
+            if log:
+                vmax = np.max(data)
+        norm_data = Normalize(vmin, vmax)(data)
+        if log:
+            a = 1000            
+            norm_data = np.log(a * norm_data + 1)/np.log(a)
+        return cls(colourmap(norm_data)[:, :, :3], colourmap, vmin, vmax, log)
     
     @classmethod
     def from_png(cls, filename):
@@ -185,7 +190,7 @@ def fix_nans(data, method):
 
 class Compressor:
     
-    def __init__(self, region, image, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec", tile_size=128):
+    def __init__(self, region, image, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec", tile_size=256):
         self.region = region
         self.image = image
         
@@ -338,18 +343,18 @@ class Comparator:
         self.compressor = compressor
     
     ALGORITHMS = {
-        "ZFP (Fixed rate)": ["ZFP_compress_fixed_rate", range(1, 32+1)],
-        "ZFP (Fixed precision)": ["ZFP_compress_fixed_precision", range(1, 32+1)],
-        "ZFP (Fixed accuracy)": [
-                "ZFP_compress_fixed_accuracy",
-                list(range(1, 21)) + [
-                    0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1,
-                    5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3, 5e-4, 2e-4, 1e-4, 
-                    5e-5, 2e-5, 1e-5, 5e-6, 2e-6, 1e-6, 5e-7, 2e-7, 1e-7
-                ]
-            ],
-        "SZ (PSNR bounded)": ["SZ_compress_PSNR", range(60, 100)],
-        "JPEG": ["JPG_compress_quality", range(60, 101)],
+        #"ZFP (Fixed rate)": ["ZFP_compress_fixed_rate", range(1, 24)],
+        "ZFP (Fixed precision)": ["ZFP_compress_fixed_precision", range(4, 28)],
+        #"ZFP (Fixed accuracy)": [
+        #        "ZFP_compress_fixed_accuracy",
+        #        list(range(1, 21)) + [
+        #            0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1,
+        #            5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3, 5e-4, 2e-4, 1e-4, 
+        #            5e-5, 2e-5, 1e-5, 5e-6, 2e-6, 1e-6, 5e-7, 2e-7, 1e-7
+        #        ]
+        #    ],
+        "SZ (PSNR bounded)": ["SZ_compress_PSNR", range(40, 110, 5)],
+        "JPEG": ["JPG_compress_quality", range(60, 101, 2)],
         "BPG (quantizer)": ["BPG_compress_quantiser", range(52)],
     }
     
@@ -371,7 +376,7 @@ class Comparator:
     ERROR_FUNCTION_NAMES = ("mean", "max", "median")
 
     @classmethod
-    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec", logarithmic=False, nan_interpolation_method=None, bpg_quant_step=4, tile_size=128):
+    def compare_algorithms(cls, region, colourmap, temp_dir=".", zfp="zfp", sz="sz", bpgenc="bpgenc", bpgdec="bpgdec", logarithmic=False, nan_interpolation_method=None, bpg_quant_step=4, tile_size=256):
         for d in region.data.shape:
             if d % tile_size:
                 raise ValueError("Image dimension %d is not divisible by tile size %d. Aborting." % (d, tile_size))
