@@ -15,7 +15,7 @@ import itertools
 import subprocess
 import operator
 
-from ipywidgets import interact, Checkbox, FloatSlider, IntSlider, IntText, SelectMultiple, Text, Dropdown, Select, fixed
+from ipywidgets import interact, Checkbox, FloatSlider, IntSlider, IntText, IntRangeSlider, SelectMultiple, Text, Dropdown, Select, fixed
 
 
 class DataWrapperMixin:
@@ -562,7 +562,7 @@ class Comparator:
             algorithm=Select(options=['None (exact)'] + list(self.ALGORITHMS.keys()), value='JPEG', description='Algorithm')
         )
     
-    def show_histograms(self, size, bins, width, height):
+    def show_histograms(self, size, bin_width, hist_range, width, height):
         plt.rcParams['figure.figsize'] = (width, height)
         
         images = {}
@@ -576,11 +576,14 @@ class Comparator:
             size_fraction, function_name, p, error_a, error_r = results[-1]
             round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(self.compressor, function_name)(p)
             images[label] = compressed_image
-            print("%s with parameter %d: size %.2f, error %.2g (absolute) %1.2e (relative)" % (label, p, size_fraction, error_a, error_r))
+            print("%s with parameter %d: size %.2f, error %.2g (absolute) %1.2e (relative)" % (label, p, size_fraction, error_a * 255, error_r * 255))
         
-        data = [(l, (self.image.image - im.image).flatten()) for l, im in images.items()]
+        data = [(l, (self.image.image * 255 - im.image * 255).flatten()) for l, im in images.items()]
         labels, datasets = zip(*data)
         colours = [self.PLOT_COLOURS[l] for l in labels]
+        
+        xmin, xmax = hist_range
+        bins = np.arange(xmin, xmax, bin_width)
         
         plt.hist(datasets, label=labels, bins=bins, color=colours)
         plt.legend()
@@ -590,7 +593,8 @@ class Comparator:
         return interact(
             self.show_histograms, 
             size=FloatSlider(value=0.5, min=0, max=1, step=0.01, continuous_update=False, description="Size fraction"),
-            bins=Select(options=[10, 25, 50, 75, 100, 500, 1000, 5000], value=100, description='Bins'),
+            bin_width=IntSlider(value=5, min=1, max=32, description='Bin width'),
+            hist_range=IntRangeSlider(value=[-50, 50], min=-255, max=256, description='Range:', continuous_update=False),
             width=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot width"), 
             height=IntSlider(value=10, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
         )
