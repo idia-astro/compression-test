@@ -561,3 +561,36 @@ class Comparator:
             show=Select(options={"Image": "image", "Difference": "difference"}, value="image", description='Show'),
             algorithm=Select(options=['None (exact)'] + list(self.ALGORITHMS.keys()), value='JPEG', description='Algorithm')
         )
+    
+    def show_histograms(self, size, bins, width, height):
+        plt.rcParams['figure.figsize'] = (width, height)
+        
+        images = {}
+
+        for label in self.unique("label"):
+            results = sorted(self.get(("size_fraction", "function_name", "param", "image_error_mean_abs", "image_error_mean_rel"), {"label": (label, operator.eq), "size_fraction": (size, operator.le)}))
+            
+            if not results:
+                continue
+            
+            size_fraction, function_name, p, error_a, error_r = results[-1]
+            round_trip_region, compressed_image, compressed_raw_size, compressed_image_size = getattr(self.compressor, function_name)(p)
+            images[label] = compressed_image
+            print("%s with parameter %d: size %.2f, error %.2g (absolute) %1.2e (relative)" % (label, p, size_fraction, error_a, error_r))
+        
+        data = [(l, (self.image.image - im.image).flatten()) for l, im in images.items()]
+        labels, datasets = zip(*data)
+        colours = [self.PLOT_COLOURS[l] for l in labels]
+        
+        plt.hist(datasets, label=labels, bins=bins, color=colours)
+        plt.legend()
+        
+        
+    def widget_histograms(self):
+        return interact(
+            self.show_histograms, 
+            size=FloatSlider(value=0.5, min=0, max=1, step=0.01, continuous_update=False, description="Size fraction"),
+            bins=Select(options=[10, 25, 50, 75, 100, 500, 1000, 5000], value=100, description='Bins'),
+            width=IntSlider(value=15, min=5, max=50, step=1, continuous_update=False, description="Subplot width"), 
+            height=IntSlider(value=10, min=5, max=50, step=1, continuous_update=False, description="Subplot height")
+        )
